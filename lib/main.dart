@@ -8,6 +8,7 @@ import 'package:vo2_flutter/exercise_catalog.dart';
 import 'package:vo2_flutter/exercise_illustration.dart';
 import 'package:vo2_flutter/ppg_waveform_card.dart';
 import 'package:vo2_flutter/sensor_processing.dart';
+import 'package:vo2_flutter/user_profile.dart';
 
 const String kReferenceDeviceAddress = 'D8:74:EF:D3:55:5F';
 const Duration kPpgWindow = Duration(seconds: 10);
@@ -67,10 +68,12 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _isConnecting = false;
   bool _isConnected = false;
 
+  UserProfile _userProfile = UserProfile.defaults;
+  double _rawEstimatedVo2 = 0;
   double _estimatedVo2 = 0;
   double _signalScore = 0;
   double _motionScore = 0;
-  int _repetitions = 0;
+  int _animatedRepetitions = 0;
   int _sampleCount = 0;
   int _rawLineCount = 0;
   int _parseFailureCount = 0;
@@ -84,7 +87,18 @@ class _DashboardPageState extends State<DashboardPage> {
     _exercise = randomExercise();
     _estimator = MotionEstimator(exercise: _exercise);
     _eventSubscription = _bridge.events().listen(_handleBluetoothEvent);
+    unawaited(_loadProfile());
     unawaited(_bootstrap());
+  }
+
+  Future<void> _loadProfile() async {
+    final UserProfile profile = await UserProfile.load();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _userProfile = profile;
+    });
   }
 
   Future<void> _bootstrap() async {
@@ -234,10 +248,10 @@ class _DashboardPageState extends State<DashboardPage> {
 
         final DerivedMetrics metrics = _estimator.absorb(sample);
         setState(() {
-          _estimatedVo2 = metrics.estimatedVo2;
+          _rawEstimatedVo2 = metrics.estimatedVo2;
+          _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
           _signalScore = metrics.signalScore;
           _motionScore = metrics.motionScore;
-          _repetitions = metrics.repetitions;
           _sampleCount += 1;
           _latestLine = sample.rawLine;
           _lastSampleAt = DateTime.now();
@@ -263,7 +277,8 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {
       _exercise = randomExercise();
       _estimator = MotionEstimator(exercise: _exercise);
-      _repetitions = 0;
+      _animatedRepetitions = 0;
+      _rawEstimatedVo2 = 0;
       _estimatedVo2 = 0;
       _signalScore = 0;
       _motionScore = 0;
@@ -273,6 +288,52 @@ class _DashboardPageState extends State<DashboardPage> {
       _latestLine = '已切換動作，等待新資料';
       _lastSampleAt = null;
       _ppgFrames.clear();
+    });
+  }
+
+  void _handleAnimationRepCompleted() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _animatedRepetitions += 1;
+    });
+  }
+
+  double _applyProfileAdjustment(double rawVo2) {
+    double adjusted = rawVo2;
+    adjusted += (_userProfile.heightCm - 170) * 0.015;
+    adjusted -= (_userProfile.weightKg - 70) * 0.025;
+    adjusted -= max(_userProfile.age - 30, 0) * 0.06;
+    switch (_userProfile.sex) {
+      case UserSex.male:
+        adjusted += 0.8;
+      case UserSex.female:
+        adjusted -= 0.8;
+      case UserSex.other:
+        break;
+    }
+    return adjusted.clamp(18.0, 65.0);
+  }
+
+  Future<void> _openProfileSettings() async {
+    final UserProfile? updatedProfile = await showDialog<UserProfile>(
+      context: context,
+      builder: (BuildContext context) {
+        return _ProfileSettingsDialog(initialProfile: _userProfile);
+      },
+    );
+
+    if (updatedProfile == null || !mounted) {
+      return;
+    }
+
+    await updatedProfile.save();
+    setState(() {
+      _userProfile = updatedProfile;
+      if (_rawEstimatedVo2 > 0) {
+        _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
+      }
     });
   }
 
@@ -322,6 +383,12 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                   ),
                   IconButton.filledTonal(
+                    onPressed: _openProfileSettings,
+                    icon: const Icon(Icons.settings_rounded),
+                    tooltip: '個人資料設定',
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
                     onPressed: _shuffleExercise,
                     icon: const Icon(Icons.shuffle_rounded),
                     tooltip: '隨機切換動作',
@@ -331,7 +398,10 @@ class _DashboardPageState extends State<DashboardPage> {
               const SizedBox(height: 18),
               SizedBox(
                 height: 320,
-                child: ExerciseIllustrationCard(exercise: _exercise),
+                child: ExerciseIllustrationCard(
+                  exercise: _exercise,
+                  onRepCompleted: _handleAnimationRepCompleted,
+                ),
               ),
               const SizedBox(height: 18),
               _ConnectionCard(
@@ -380,7 +450,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                   _MetricCard(
                     title: '做了幾下',
-                    value: _repetitions.toString(),
+                    value: _animatedRepetitions.toString(),
                     unit: 'reps',
                     tone: const Color(0xFFEA580C),
                   ),
@@ -441,6 +511,8 @@ class _DashboardPageState extends State<DashboardPage> {
                     Text('原始資料行數：$_rawLineCount'),
                     const SizedBox(height: 4),
                     Text('已接收樣本：$_sampleCount'),
+                    const SizedBox(height: 4),
+                    Text('個人資料：${_userProfile.summary}'),
                     if (_parseFailureCount > 0) ...<Widget>[
                       const SizedBox(height: 4),
                       Text('未解析資料：$_parseFailureCount'),
@@ -721,6 +793,139 @@ class _MetricCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ProfileSettingsDialog extends StatefulWidget {
+  const _ProfileSettingsDialog({required this.initialProfile});
+
+  final UserProfile initialProfile;
+
+  @override
+  State<_ProfileSettingsDialog> createState() => _ProfileSettingsDialogState();
+}
+
+class _ProfileSettingsDialogState extends State<_ProfileSettingsDialog> {
+  late final TextEditingController _heightController;
+  late final TextEditingController _weightController;
+  late final TextEditingController _ageController;
+  late UserSex _sex;
+
+  @override
+  void initState() {
+    super.initState();
+    _heightController = TextEditingController(
+      text: widget.initialProfile.heightCm.toStringAsFixed(0),
+    );
+    _weightController = TextEditingController(
+      text: widget.initialProfile.weightKg.toStringAsFixed(0),
+    );
+    _ageController = TextEditingController(
+      text: widget.initialProfile.age.toString(),
+    );
+    _sex = widget.initialProfile.sex;
+  }
+
+  @override
+  void dispose() {
+    _heightController.dispose();
+    _weightController.dispose();
+    _ageController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final double? height = double.tryParse(_heightController.text.trim());
+    final double? weight = double.tryParse(_weightController.text.trim());
+    final int? age = int.tryParse(_ageController.text.trim());
+
+    if (height == null || weight == null || age == null) {
+      return;
+    }
+
+    Navigator.of(context).pop(
+      UserProfile(
+        heightCm: height.clamp(100, 230),
+        weightKg: weight.clamp(20, 250),
+        age: age.clamp(5, 120),
+        sex: _sex,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('個人資料設定'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            TextField(
+              controller: _heightController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: '身高 (cm)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _weightController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: '體重 (kg)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _ageController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '年齡',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              '性別',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: UserSex.values.map((UserSex sex) {
+                return ChoiceChip(
+                  selected: _sex == sex,
+                  label: Text(sex.label),
+                  onSelected: (_) {
+                    setState(() {
+                      _sex = sex;
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('儲存')),
+      ],
     );
   }
 }
