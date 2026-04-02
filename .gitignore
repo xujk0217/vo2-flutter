@@ -1,0 +1,55 @@
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+*.tmp
+*.log
+
+# JetBrains / VS Code
+.idea/
+*.iml
+.vscode/
+
+# Dart / Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+**/doc/api/
+.metadata
+
+# Generated Flutter platform files
+**/ios/Flutter/.last_build_id
+**/ephemeral/
+**/Generated.xcconfig
+**/flutter_export_environment.sh
+
+# Android / Gradle
+android/.gradle/
+android/local.properties
+android/**/captures/
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# Apple platforms / Xcode
+macos/Pods/
+ios/Pods/
+ios/.symlinks/
+macos/.symlinks/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# C / C++ / Swift package leftovers
+.build/
+.swiftpm/
+
+# Symbolication / obfuscation
+app.*.symbols
+app.*.map.json

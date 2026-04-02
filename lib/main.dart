@@ -1,0 +1,726 @@
+import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:vo2_flutter/bluetooth_bridge.dart';
+import 'package:vo2_flutter/exercise_catalog.dart';
+import 'package:vo2_flutter/exercise_illustration.dart';
+import 'package:vo2_flutter/ppg_waveform_card.dart';
+import 'package:vo2_flutter/sensor_processing.dart';
+
+const String kReferenceDeviceAddress = 'D8:74:EF:D3:55:5F';
+const Duration kPpgWindow = Duration(seconds: 10);
+
+void main() {
+  runApp(const Vo2MotionApp());
+}
+
+class Vo2MotionApp extends StatelessWidget {
+  const Vo2MotionApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF0E7490),
+    );
+
+    return MaterialApp(
+      title: 'VO2 Motion Monitor',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: colorScheme,
+        scaffoldBackgroundColor: const Color(0xFFF3F7FA),
+        textTheme: ThemeData.light().textTheme.apply(
+          bodyColor: const Color(0xFF0F172A),
+          displayColor: const Color(0xFF0F172A),
+        ),
+      ),
+      home: const DashboardPage(),
+    );
+  }
+}
+
+class DashboardPage extends StatefulWidget {
+  const DashboardPage({super.key});
+
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends State<DashboardPage> {
+  final BluetoothBridge _bridge = BluetoothBridge();
+  late ExerciseType _exercise;
+  late MotionEstimator _estimator;
+
+  StreamSubscription<Map<String, dynamic>>? _eventSubscription;
+  List<BluetoothDeviceInfo> _devices = <BluetoothDeviceInfo>[];
+
+  String? _selectedAddress;
+  String _statusMessage = '等待藍牙權限';
+  String _latestLine = '尚未收到資料';
+
+  bool _permissionsGranted = false;
+  bool _bluetoothEnabled = false;
+  bool _isLoadingDevices = false;
+  bool _isConnecting = false;
+  bool _isConnected = false;
+
+  double _estimatedVo2 = 0;
+  double _signalScore = 0;
+  double _motionScore = 0;
+  int _repetitions = 0;
+  int _sampleCount = 0;
+  int _rawLineCount = 0;
+  int _parseFailureCount = 0;
+  int _selectedPpgChannel = 0;
+  DateTime? _lastSampleAt;
+  final List<PpgFrame> _ppgFrames = <PpgFrame>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _exercise = randomExercise();
+    _estimator = MotionEstimator(exercise: _exercise);
+    _eventSubscription = _bridge.events().listen(_handleBluetoothEvent);
+    unawaited(_bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    final bool granted = await _bridge.requestPermissions();
+    final bool enabled = await _bridge.isBluetoothEnabled();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _permissionsGranted = granted;
+      _bluetoothEnabled = enabled;
+      _statusMessage = granted
+          ? (enabled ? '藍牙已就緒，請選擇裝置。' : '請先開啟手機藍牙。')
+          : '請允許藍牙權限。';
+    });
+
+    if (granted && enabled) {
+      await _loadBondedDevices();
+    }
+  }
+
+  Future<void> _loadBondedDevices() async {
+    if (!_permissionsGranted) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingDevices = true;
+    });
+
+    try {
+      final List<BluetoothDeviceInfo> devices = await _bridge
+          .getBondedDevices();
+      if (!mounted) {
+        return;
+      }
+
+      String? selectedAddress = _selectedAddress;
+      if (devices.isNotEmpty) {
+        final BluetoothDeviceInfo preferred = devices.firstWhere(
+          (BluetoothDeviceInfo device) =>
+              device.address.toUpperCase() == kReferenceDeviceAddress,
+          orElse: () => devices.first,
+        );
+        selectedAddress =
+            devices.any(
+              (BluetoothDeviceInfo device) =>
+                  device.address == _selectedAddress,
+            )
+            ? _selectedAddress
+            : preferred.address;
+      } else {
+        selectedAddress = null;
+      }
+
+      setState(() {
+        _devices = devices;
+        _selectedAddress = selectedAddress;
+        _statusMessage = devices.isEmpty
+            ? '找不到已配對裝置，請先在系統藍牙設定完成配對。'
+            : '已載入 ${devices.length} 台已配對裝置。';
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusMessage = error.message ?? '讀取已配對裝置失敗。';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingDevices = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _toggleConnection() async {
+    if (_isConnected) {
+      await _bridge.disconnect();
+      return;
+    }
+
+    final String? address = _selectedAddress;
+    if (address == null) {
+      setState(() {
+        _statusMessage = '請先選擇藍牙裝置。';
+      });
+      return;
+    }
+
+    setState(() {
+      _isConnecting = true;
+      _statusMessage = '準備連接 $address ...';
+    });
+
+    try {
+      await _bridge.connect(address);
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusMessage = error.message ?? '藍牙連線失敗。';
+        _isConnecting = false;
+        _isConnected = false;
+      });
+    }
+  }
+
+  void _handleBluetoothEvent(Map<String, dynamic> event) {
+    final String type = event['type'] as String? ?? '';
+    if (!mounted) {
+      return;
+    }
+
+    switch (type) {
+      case 'status':
+        final String state = event['state'] as String? ?? '';
+        setState(() {
+          _statusMessage = event['message'] as String? ?? '藍牙狀態更新';
+          _isConnecting = state == 'connecting';
+          _isConnected = state == 'connected';
+        });
+        break;
+      case 'error':
+        setState(() {
+          _statusMessage = event['message'] as String? ?? '藍牙錯誤';
+          _isConnecting = false;
+          _isConnected = false;
+        });
+        break;
+      case 'data':
+        final String line = event['line'] as String? ?? '';
+        _rawLineCount += 1;
+        _latestLine = line;
+        final SensorSample? sample = SensorSample.tryParse(line);
+        if (sample == null) {
+          setState(() {
+            _parseFailureCount += 1;
+            _statusMessage = '已收到原始資料，但格式尚未解析成功。';
+          });
+          return;
+        }
+
+        final DerivedMetrics metrics = _estimator.absorb(sample);
+        setState(() {
+          _estimatedVo2 = metrics.estimatedVo2;
+          _signalScore = metrics.signalScore;
+          _motionScore = metrics.motionScore;
+          _repetitions = metrics.repetitions;
+          _sampleCount += 1;
+          _latestLine = sample.rawLine;
+          _lastSampleAt = DateTime.now();
+          _parseFailureCount = 0;
+          _appendPpgSample(sample.ppg);
+        });
+        break;
+    }
+  }
+
+  void _appendPpgSample(List<double> values) {
+    final DateTime now = DateTime.now();
+    _ppgFrames.add(
+      PpgFrame(receivedAt: now, values: List<double>.from(values)),
+    );
+    final DateTime cutoff = now.subtract(kPpgWindow);
+    _ppgFrames.removeWhere(
+      (PpgFrame frame) => frame.receivedAt.isBefore(cutoff),
+    );
+  }
+
+  void _shuffleExercise() {
+    setState(() {
+      _exercise = randomExercise();
+      _estimator = MotionEstimator(exercise: _exercise);
+      _repetitions = 0;
+      _estimatedVo2 = 0;
+      _signalScore = 0;
+      _motionScore = 0;
+      _sampleCount = 0;
+      _rawLineCount = 0;
+      _parseFailureCount = 0;
+      _latestLine = '已切換動作，等待新資料';
+      _lastSampleAt = null;
+      _ppgFrames.clear();
+    });
+  }
+
+  String _selectedDeviceName() {
+    for (final BluetoothDeviceInfo device in _devices) {
+      if (device.address == _selectedAddress) {
+        return device.name;
+      }
+    }
+    return '未選擇裝置';
+  }
+
+  @override
+  void dispose() {
+    _eventSubscription?.cancel();
+    unawaited(_bridge.disconnect());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _bootstrap,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          'VO2 Motion Monitor',
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Android classic Bluetooth RFCOMM 接收 PPG / IMU',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: const Color(0xFF475569)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton.filledTonal(
+                    onPressed: _shuffleExercise,
+                    icon: const Icon(Icons.shuffle_rounded),
+                    tooltip: '隨機切換動作',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                height: 320,
+                child: ExerciseIllustrationCard(exercise: _exercise),
+              ),
+              const SizedBox(height: 18),
+              _ConnectionCard(
+                devices: _devices,
+                selectedAddress: _selectedAddress,
+                bluetoothEnabled: _bluetoothEnabled,
+                permissionsGranted: _permissionsGranted,
+                statusMessage: _statusMessage,
+                isLoadingDevices: _isLoadingDevices,
+                isConnecting: _isConnecting,
+                isConnected: _isConnected,
+                onRefreshDevices: _loadBondedDevices,
+                onRequestPermissions: _bootstrap,
+                onConnectPressed: _toggleConnection,
+                onDeviceChanged: (String? value) {
+                  setState(() {
+                    _selectedAddress = value;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '即時資料',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: <Widget>[
+                  _MetricCard(
+                    title: '推估 VO2',
+                    value: _estimatedVo2 == 0
+                        ? '--'
+                        : _estimatedVo2.toStringAsFixed(1),
+                    unit: 'ml/kg/min',
+                    tone: const Color(0xFF0284C7),
+                  ),
+                  _MetricCard(
+                    title: '目前動作',
+                    value: _exercise.label,
+                    unit: _exercise.caption,
+                    tone: _exercise.endColor,
+                  ),
+                  _MetricCard(
+                    title: '做了幾下',
+                    value: _repetitions.toString(),
+                    unit: 'reps',
+                    tone: const Color(0xFFEA580C),
+                  ),
+                  _MetricCard(
+                    title: 'PPG / IMU 指標',
+                    value: _sampleCount == 0
+                        ? '--'
+                        : '${_signalScore.toStringAsFixed(2)} / ${_motionScore.toStringAsFixed(2)}',
+                    unit: 'signal / motion',
+                    tone: const Color(0xFF16A34A),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              PpgWaveformCard(
+                frames: List<PpgFrame>.from(_ppgFrames),
+                selectedChannel: _selectedPpgChannel,
+                window: kPpgWindow,
+                onChannelSelected: (int index) {
+                  setState(() {
+                    _selectedPpgChannel = index;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: const <BoxShadow>[
+                    BoxShadow(
+                      color: Color(0x140F172A),
+                      blurRadius: 24,
+                      offset: Offset(0, 14),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        const Icon(Icons.memory_rounded, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          '資料摘要',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text('裝置：${_selectedDeviceName()}'),
+                    const SizedBox(height: 4),
+                    Text('參考 MAC：$kReferenceDeviceAddress'),
+                    const SizedBox(height: 4),
+                    Text('原始資料行數：$_rawLineCount'),
+                    const SizedBox(height: 4),
+                    Text('已接收樣本：$_sampleCount'),
+                    if (_parseFailureCount > 0) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Text('未解析資料：$_parseFailureCount'),
+                    ],
+                    const SizedBox(height: 4),
+                    Text(
+                      '最後更新：${_lastSampleAt == null ? '--' : _lastSampleAt!.toLocal().toIso8601String()}',
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '最新原始資料',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _latestLine,
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF475569),
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'VO2 目前是依 PPG 強度與 IMU 活動量做近似估算；動作名稱先隨機指定一種。',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectionCard extends StatelessWidget {
+  const _ConnectionCard({
+    required this.devices,
+    required this.selectedAddress,
+    required this.permissionsGranted,
+    required this.bluetoothEnabled,
+    required this.statusMessage,
+    required this.isLoadingDevices,
+    required this.isConnecting,
+    required this.isConnected,
+    required this.onRequestPermissions,
+    required this.onRefreshDevices,
+    required this.onConnectPressed,
+    required this.onDeviceChanged,
+  });
+
+  final List<BluetoothDeviceInfo> devices;
+  final String? selectedAddress;
+  final bool permissionsGranted;
+  final bool bluetoothEnabled;
+  final String statusMessage;
+  final bool isLoadingDevices;
+  final bool isConnecting;
+  final bool isConnected;
+  final Future<void> Function() onRequestPermissions;
+  final Future<void> Function() onRefreshDevices;
+  final Future<void> Function() onConnectPressed;
+  final ValueChanged<String?> onDeviceChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x140F172A),
+            blurRadius: 24,
+            offset: Offset(0, 14),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  '藍牙連線',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: isLoadingDevices
+                    ? null
+                    : () {
+                        unawaited(onRefreshDevices());
+                      },
+                icon: isLoadingDevices
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+                label: const Text('重新整理'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    isConnected
+                        ? Icons.bluetooth_connected
+                        : Icons.bluetooth_searching,
+                    color: isConnected
+                        ? const Color(0xFF16A34A)
+                        : const Color(0xFF0284C7),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      statusMessage,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (!permissionsGranted || !bluetoothEnabled)
+            FilledButton.icon(
+              onPressed: () {
+                unawaited(onRequestPermissions());
+              },
+              icon: const Icon(Icons.settings_bluetooth_rounded),
+              label: Text(!permissionsGranted ? '允許藍牙權限' : '重新檢查藍牙狀態'),
+            )
+          else if (devices.isEmpty)
+            Text(
+              '沒有已配對裝置，請先在 Android 系統藍牙頁面完成配對。',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF475569)),
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                DropdownButtonFormField<String>(
+                  initialValue:
+                      devices.any(
+                        (BluetoothDeviceInfo d) => d.address == selectedAddress,
+                      )
+                      ? selectedAddress
+                      : null,
+                  decoration: const InputDecoration(
+                    labelText: '已配對裝置',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: devices
+                      .map(
+                        (BluetoothDeviceInfo device) =>
+                            DropdownMenuItem<String>(
+                              value: device.address,
+                              child: Text('${device.name} (${device.address})'),
+                            ),
+                      )
+                      .toList(),
+                  onChanged: onDeviceChanged,
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: isConnecting
+                      ? null
+                      : () {
+                          unawaited(onConnectPressed());
+                        },
+                  icon: Icon(
+                    isConnected
+                        ? Icons.link_off_rounded
+                        : Icons.bluetooth_connected_rounded,
+                  ),
+                  label: Text(
+                    isConnected
+                        ? '中斷連線'
+                        : isConnecting
+                        ? '連線中...'
+                        : '開始接收資料',
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.title,
+    required this.value,
+    required this.unit,
+    required this.tone,
+  });
+
+  final String title;
+  final String value;
+  final String unit;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final double width = (MediaQuery.sizeOf(context).width - 52) / 2;
+    return Container(
+      width: max(160, width),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x140F172A),
+            blurRadius: 18,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: tone,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            unit,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+          ),
+        ],
+      ),
+    );
+  }
+}
