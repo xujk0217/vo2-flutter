@@ -7,10 +7,12 @@ class ExerciseIllustrationCard extends StatefulWidget {
   const ExerciseIllustrationCard({
     super.key,
     required this.exercise,
+    required this.isActive,
     required this.onRepCompleted,
   });
 
   final ExerciseType exercise;
+  final bool isActive;
   final VoidCallback onRepCompleted;
 
   @override
@@ -27,18 +29,23 @@ class _ExerciseIllustrationCardState extends State<ExerciseIllustrationCard>
     super.initState();
     _controller =
         AnimationController(
-            vsync: this,
-            duration: const Duration(milliseconds: 1600),
-          )
-          ..addStatusListener((AnimationStatus status) {
-            if (status == AnimationStatus.completed) {
+          vsync: this,
+          duration: const Duration(milliseconds: 1600),
+        )..addStatusListener((AnimationStatus status) {
+          if (status == AnimationStatus.completed) {
+            if (widget.isActive) {
               widget.onRepCompleted();
               _controller.reverse();
-            } else if (status == AnimationStatus.dismissed) {
+            }
+          } else if (status == AnimationStatus.dismissed) {
+            if (widget.isActive) {
               _controller.forward();
             }
-          })
-          ..forward();
+          }
+        });
+    if (widget.isActive) {
+      _controller.forward();
+    }
   }
 
   @override
@@ -47,7 +54,20 @@ class _ExerciseIllustrationCardState extends State<ExerciseIllustrationCard>
     if (oldWidget.exercise.pose != widget.exercise.pose) {
       _controller
         ..value = 0
-        ..forward();
+        ..stop();
+      if (widget.isActive) {
+        _controller.forward();
+      }
+    } else if (oldWidget.isActive != widget.isActive) {
+      if (widget.isActive) {
+        _controller
+          ..value = 0
+          ..forward();
+      } else {
+        _controller
+          ..stop()
+          ..value = 0;
+      }
     }
   }
 
@@ -128,7 +148,9 @@ class _ExerciseIllustrationCardState extends State<ExerciseIllustrationCard>
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '示意圖會循環動作並同步累加次數',
+                      widget.isActive
+                          ? '藍牙已連線，示意圖會循環動作並同步累加次數'
+                          : '等待藍牙連線後開始動作與計次',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Colors.white.withValues(alpha: 0.85),
                       ),
@@ -204,41 +226,391 @@ class _AthletePainter extends CustomPainter {
     final _PosePoints end = _endPose(size);
     final _PosePoints points = _PosePoints.lerp(start, end, progress);
 
-    final Paint body = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 10
+    _drawEquipment(canvas, size, points);
+
+    final Offset leftShoulder = points.neck.translate(
+      -size.width * 0.065,
+      size.height * 0.02,
+    );
+    final Offset rightShoulder = points.neck.translate(
+      size.width * 0.065,
+      size.height * 0.02,
+    );
+    final Offset leftHip = points.hip.translate(-size.width * 0.045, 0);
+    final Offset rightHip = points.hip.translate(size.width * 0.045, 0);
+    final double upperArmLength = size.height * 0.16;
+    final double lowerArmLength = size.height * 0.15;
+    final double upperLegLength = size.height * 0.22;
+    final double lowerLegLength = size.height * 0.21;
+    _ResolvedLimb leftArm = _ResolvedLimb(
+      joint: _solveJoint(
+        leftShoulder,
+        points.leftHand,
+        upperArmLength,
+        lowerArmLength,
+        points.leftElbow,
+      ),
+      end: points.leftHand,
+    );
+    _ResolvedLimb rightArm = _ResolvedLimb(
+      joint: _solveJoint(
+        rightShoulder,
+        points.rightHand,
+        upperArmLength,
+        lowerArmLength,
+        points.rightElbow,
+      ),
+      end: points.rightHand,
+    );
+    _ResolvedLimb leftLeg = _ResolvedLimb(
+      joint: _solveJoint(
+        leftHip,
+        points.leftFoot,
+        upperLegLength,
+        lowerLegLength,
+        points.leftKnee,
+      ),
+      end: points.leftFoot,
+    );
+    _ResolvedLimb rightLeg = _ResolvedLimb(
+      joint: _solveJoint(
+        rightHip,
+        points.rightFoot,
+        upperLegLength,
+        lowerLegLength,
+        points.rightKnee,
+      ),
+      end: points.rightFoot,
+    );
+
+    switch (pose) {
+      case ExercisePose.dumbbellSquat:
+        leftLeg = _resolveGuidedLimb(
+          leftHip,
+          points.leftKnee,
+          points.leftFoot,
+          upperLegLength,
+          lowerLegLength,
+        );
+        rightLeg = _resolveGuidedLimb(
+          rightHip,
+          points.rightKnee,
+          points.rightFoot,
+          upperLegLength,
+          lowerLegLength,
+        );
+        break;
+      case ExercisePose.singleArmDumbbellRow:
+      case ExercisePose.dumbbellBicepsCurl:
+        leftArm = _resolveGuidedLimb(
+          leftShoulder,
+          points.leftElbow,
+          points.leftHand,
+          upperArmLength,
+          lowerArmLength,
+        );
+        rightArm = _resolveGuidedLimb(
+          rightShoulder,
+          points.rightElbow,
+          points.rightHand,
+          upperArmLength,
+          lowerArmLength,
+        );
+        break;
+      case ExercisePose.dumbbellBenchPress:
+      case ExercisePose.dumbbellShoulderPress:
+      case ExercisePose.dumbbellTricepsExtension:
+      case ExercisePose.dumbbellRomanianDeadlift:
+      case ExercisePose.dumbbellCrunch:
+        break;
+    }
+
+    _drawTorso(canvas, leftShoulder, rightShoulder, leftHip, rightHip);
+    _drawStyledLimb(
+      canvas,
+      leftShoulder,
+      leftArm.joint,
+      leftArm.end,
+      width: 15,
+    );
+    _drawStyledLimb(
+      canvas,
+      rightShoulder,
+      rightArm.joint,
+      rightArm.end,
+      width: 15,
+    );
+    _drawStyledLimb(canvas, leftHip, leftLeg.joint, leftLeg.end, width: 17);
+    _drawStyledLimb(canvas, rightHip, rightLeg.joint, rightLeg.end, width: 17);
+
+    _drawHead(canvas, points.headCenter, size.width * 0.06);
+    _drawHand(canvas, leftArm.end);
+    _drawHand(canvas, rightArm.end);
+    _drawFoot(canvas, leftLeg.end, left: true);
+    _drawFoot(canvas, rightLeg.end, left: false);
+
+    for (final Offset point in <Offset>[
+      leftShoulder,
+      rightShoulder,
+      leftHip,
+      rightHip,
+      leftArm.joint,
+      rightArm.joint,
+      leftLeg.joint,
+      rightLeg.joint,
+    ]) {
+      _drawJoint(canvas, point);
+    }
+
+    _drawWeights(
+      canvas,
+      leftHand: leftArm.end,
+      rightHand: rightArm.end,
+      leftGripAngle: points.leftGripAngle,
+      rightGripAngle: points.rightGripAngle,
+    );
+  }
+
+  void _drawEquipment(Canvas canvas, Size size, _PosePoints points) {
+    final Paint frame = Paint()
+      ..color = Colors.white.withValues(alpha: 0.42)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+    final Paint fill = Paint()
+      ..color = const Color(0xFFF8FAFC).withValues(alpha: 0.18)
+      ..style = PaintingStyle.fill;
+
+    switch (pose) {
+      case ExercisePose.dumbbellBenchPress:
+        final RRect benchPad = RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(size.width * 0.34, size.height * 0.60),
+            width: size.width * 0.40,
+            height: size.height * 0.09,
+          ),
+          const Radius.circular(18),
+        );
+        canvas.drawRRect(benchPad, fill);
+        canvas.drawRRect(benchPad, frame);
+        canvas.drawLine(
+          Offset(size.width * 0.26, size.height * 0.64),
+          Offset(size.width * 0.22, size.height * 0.82),
+          frame,
+        );
+        canvas.drawLine(
+          Offset(size.width * 0.42, size.height * 0.64),
+          Offset(size.width * 0.46, size.height * 0.82),
+          frame,
+        );
+        break;
+      case ExercisePose.singleArmDumbbellRow:
+        final RRect supportBench = RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(size.width * 0.50, size.height * 0.57),
+            width: size.width * 0.26,
+            height: size.height * 0.08,
+          ),
+          const Radius.circular(16),
+        );
+        canvas.drawRRect(supportBench, fill);
+        canvas.drawRRect(supportBench, frame);
+        canvas.drawLine(
+          Offset(size.width * 0.44, size.height * 0.61),
+          Offset(size.width * 0.40, size.height * 0.80),
+          frame,
+        );
+        canvas.drawLine(
+          Offset(size.width * 0.56, size.height * 0.61),
+          Offset(size.width * 0.60, size.height * 0.80),
+          frame,
+        );
+        break;
+      case ExercisePose.dumbbellShoulderPress:
+      case ExercisePose.dumbbellTricepsExtension:
+        final RRect seat = RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(size.width * 0.50, size.height * 0.62),
+            width: size.width * 0.24,
+            height: size.height * 0.08,
+          ),
+          const Radius.circular(14),
+        );
+        canvas.drawRRect(seat, fill);
+        canvas.drawRRect(seat, frame);
+        canvas.drawLine(
+          Offset(size.width * 0.44, size.height * 0.66),
+          Offset(size.width * 0.44, size.height * 0.84),
+          frame,
+        );
+        canvas.drawLine(
+          Offset(size.width * 0.56, size.height * 0.66),
+          Offset(size.width * 0.56, size.height * 0.84),
+          frame,
+        );
+        break;
+      case ExercisePose.dumbbellCrunch:
+        final RRect mat = RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(size.width * 0.40, size.height * 0.72),
+            width: size.width * 0.52,
+            height: size.height * 0.12,
+          ),
+          const Radius.circular(24),
+        );
+        canvas.drawRRect(mat, fill);
+        canvas.drawRRect(mat, frame);
+        break;
+      case ExercisePose.dumbbellBicepsCurl:
+      case ExercisePose.dumbbellSquat:
+      case ExercisePose.dumbbellRomanianDeadlift:
+        final Paint guide = Paint()
+          ..color = Colors.white.withValues(alpha: 0.16)
+          ..strokeWidth = 2;
+        canvas.drawLine(
+          Offset(size.width * 0.18, size.height * 0.74),
+          Offset(size.width * 0.82, size.height * 0.74),
+          guide,
+        );
+        break;
+    }
+  }
+
+  void _drawTorso(
+    Canvas canvas,
+    Offset leftShoulder,
+    Offset rightShoulder,
+    Offset leftHip,
+    Offset rightHip,
+  ) {
+    final Path torso = Path()
+      ..moveTo(leftShoulder.dx, leftShoulder.dy)
+      ..quadraticBezierTo(
+        (leftShoulder.dx + leftHip.dx) / 2 - 8,
+        (leftShoulder.dy + leftHip.dy) / 2,
+        leftHip.dx,
+        leftHip.dy,
+      )
+      ..lineTo(rightHip.dx, rightHip.dy)
+      ..quadraticBezierTo(
+        (rightShoulder.dx + rightHip.dx) / 2 + 8,
+        (rightShoulder.dy + rightHip.dy) / 2,
+        rightShoulder.dx,
+        rightShoulder.dy,
+      )
+      ..close();
+
+    final Paint torsoFill = Paint()
+      ..color = const Color(0xFFF8FAFC)
+      ..style = PaintingStyle.fill;
+    final Paint torsoShadow = Paint()
+      ..color = const Color(0xFFBAE6FD).withValues(alpha: 0.55)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawShadow(torso, Colors.black.withValues(alpha: 0.18), 8, false);
+    canvas.drawPath(torso, torsoFill);
+
+    final Path highlight = Path()
+      ..moveTo(leftShoulder.dx + 4, leftShoulder.dy + 8)
+      ..quadraticBezierTo(
+        (leftShoulder.dx + leftHip.dx) / 2,
+        (leftShoulder.dy + leftHip.dy) / 2 + 4,
+        leftHip.dx + 6,
+        leftHip.dy - 6,
+      )
+      ..lineTo(rightHip.dx - 10, rightHip.dy - 2)
+      ..quadraticBezierTo(
+        rightShoulder.dx - 18,
+        (rightShoulder.dy + rightHip.dy) / 2,
+        rightShoulder.dx - 6,
+        rightShoulder.dy + 10,
+      )
+      ..close();
+    canvas.drawPath(highlight, torsoShadow);
+  }
+
+  void _drawStyledLimb(
+    Canvas canvas,
+    Offset a,
+    Offset b,
+    Offset c, {
+    required double width,
+  }) {
+    final Paint shadow = Paint()
+      ..color = Colors.black.withValues(alpha: 0.14)
+      ..strokeWidth = width + 4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final Paint main = Paint()
+      ..color = const Color(0xFFF8FAFC)
+      ..strokeWidth = width
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final Paint accent = Paint()
+      ..color = const Color(0xFFDBEAFE).withValues(alpha: 0.75)
+      ..strokeWidth = width * 0.42
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
-    final Paint joint = Paint()
-      ..color = const Color(0xFFE0F2FE)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawLine(points.neck, points.hip, body);
-    _drawLimb(canvas, body, points.neck, points.leftElbow, points.leftHand);
-    _drawLimb(canvas, body, points.neck, points.rightElbow, points.rightHand);
-    _drawLimb(canvas, body, points.hip, points.leftKnee, points.leftFoot);
-    _drawLimb(canvas, body, points.hip, points.rightKnee, points.rightFoot);
-
-    canvas.drawCircle(points.headCenter, size.width * 0.055, joint);
-    for (final Offset point in <Offset>[
-      points.neck,
-      points.hip,
-      points.leftElbow,
-      points.rightElbow,
-      points.leftKnee,
-      points.rightKnee,
-    ]) {
-      canvas.drawCircle(point, 5.5, joint);
-    }
-
-    _drawDumbbell(canvas, points.leftHand, points.leftGripAngle);
-    _drawDumbbell(canvas, points.rightHand, points.rightGripAngle);
+    canvas.drawLine(a.translate(0, 2), b.translate(0, 2), shadow);
+    canvas.drawLine(b.translate(0, 2), c.translate(0, 2), shadow);
+    canvas.drawLine(a, b, main);
+    canvas.drawLine(b, c, main);
+    canvas.drawLine(a, b, accent);
+    canvas.drawLine(b, c, accent);
   }
 
-  void _drawLimb(Canvas canvas, Paint paint, Offset a, Offset b, Offset c) {
-    canvas.drawLine(a, b, paint);
-    canvas.drawLine(b, c, paint);
+  void _drawHead(Canvas canvas, Offset center, double radius) {
+    final Paint head = Paint()
+      ..color = const Color(0xFFF8FAFC)
+      ..style = PaintingStyle.fill;
+    final Paint face = Paint()
+      ..color = const Color(0xFFDBEAFE).withValues(alpha: 0.7)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(
+      center.translate(0, 2),
+      radius,
+      Paint()..color = Colors.black.withValues(alpha: 0.14),
+    );
+    canvas.drawCircle(center, radius, head);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: center.translate(radius * 0.12, radius * 0.08),
+        width: radius * 1.35,
+        height: radius * 1.05,
+      ),
+      face,
+    );
+  }
+
+  void _drawJoint(Canvas canvas, Offset center) {
+    canvas.drawCircle(
+      center.translate(0, 1),
+      6.2,
+      Paint()..color = Colors.black.withValues(alpha: 0.12),
+    );
+    canvas.drawCircle(center, 5.5, Paint()..color = const Color(0xFFE0F2FE));
+  }
+
+  void _drawHand(Canvas canvas, Offset center) {
+    canvas.drawCircle(center, 4.6, Paint()..color = const Color(0xFFF8FAFC));
+  }
+
+  void _drawFoot(Canvas canvas, Offset center, {required bool left}) {
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(left ? -0.12 : 0.12);
+    final RRect shoe = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: const Offset(0, 0), width: 20, height: 9),
+      const Radius.circular(5),
+    );
+    canvas.drawRRect(
+      shoe.shift(const Offset(0, 1.5)),
+      Paint()..color = Colors.black.withValues(alpha: 0.12),
+    );
+    canvas.drawRRect(shoe, Paint()..color = const Color(0xFFF8FAFC));
+    canvas.restore();
   }
 
   void _drawDumbbell(Canvas canvas, Offset center, double angle) {
@@ -246,31 +618,149 @@ class _AthletePainter extends CustomPainter {
     canvas.translate(center.dx, center.dy);
     canvas.rotate(angle);
 
+    final Paint shadow = Paint()
+      ..color = Colors.black.withValues(alpha: 0.16)
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
     final Paint handle = Paint()
       ..color = Colors.white
-      ..strokeWidth = 5
+      ..strokeWidth = 5.5
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
     final Paint plate = Paint()
       ..color = const Color(0xFFE0F2FE)
       ..style = PaintingStyle.fill;
+    final Paint plateStroke = Paint()
+      ..color = Colors.white.withValues(alpha: 0.75)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6;
 
+    canvas.drawLine(const Offset(-11, 1.5), const Offset(11, 1.5), shadow);
     canvas.drawLine(const Offset(-11, 0), const Offset(11, 0), handle);
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromCenter(center: const Offset(-16, 0), width: 6, height: 18),
+        Rect.fromCenter(center: const Offset(-18, 0), width: 8, height: 20),
         const Radius.circular(3),
       ),
       plate,
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromCenter(center: const Offset(16, 0), width: 6, height: 18),
+        Rect.fromCenter(center: const Offset(-18, 0), width: 8, height: 20),
+        const Radius.circular(3),
+      ),
+      plateStroke,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: const Offset(18, 0), width: 8, height: 20),
         const Radius.circular(3),
       ),
       plate,
     );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: const Offset(18, 0), width: 8, height: 20),
+        const Radius.circular(3),
+      ),
+      plateStroke,
+    );
     canvas.restore();
+  }
+
+  void _drawWeights(
+    Canvas canvas, {
+    required Offset leftHand,
+    required Offset rightHand,
+    required double leftGripAngle,
+    required double rightGripAngle,
+  }) {
+    switch (pose) {
+      case ExercisePose.singleArmDumbbellRow:
+        _drawDumbbell(canvas, leftHand, leftGripAngle);
+        break;
+      case ExercisePose.dumbbellTricepsExtension:
+      case ExercisePose.dumbbellCrunch:
+        final Offset center = Offset.lerp(leftHand, rightHand, 0.5)!;
+        final double angle = (leftGripAngle + rightGripAngle) / 2;
+        _drawDumbbell(canvas, center, angle);
+        break;
+      case ExercisePose.dumbbellBenchPress:
+      case ExercisePose.dumbbellShoulderPress:
+      case ExercisePose.dumbbellSquat:
+      case ExercisePose.dumbbellRomanianDeadlift:
+        _drawDumbbell(canvas, leftHand, leftGripAngle);
+        _drawDumbbell(canvas, rightHand, rightGripAngle);
+        break;
+      case ExercisePose.dumbbellBicepsCurl:
+        _drawDumbbell(canvas, leftHand, leftGripAngle);
+        break;
+    }
+  }
+
+  _ResolvedLimb _resolveGuidedLimb(
+    Offset start,
+    Offset jointGuide,
+    Offset endGuide,
+    double upperLength,
+    double lowerLength,
+  ) {
+    final Offset jointDirection = _normalizedOrFallback(
+      jointGuide - start,
+      const Offset(0, 1),
+    );
+    final Offset joint = start + (jointDirection * upperLength);
+    final Offset endDirection = _normalizedOrFallback(
+      endGuide - jointGuide,
+      jointGuide - start,
+    );
+    final Offset end = joint + (endDirection * lowerLength);
+    return _ResolvedLimb(joint: joint, end: end);
+  }
+
+  Offset _normalizedOrFallback(Offset vector, Offset fallback) {
+    if (vector.distanceSquared > 0.0001) {
+      return vector / vector.distance;
+    }
+    if (fallback.distanceSquared > 0.0001) {
+      return fallback / fallback.distance;
+    }
+    return const Offset(0, 1);
+  }
+
+  Offset _solveJoint(
+    Offset start,
+    Offset end,
+    double upperLength,
+    double lowerLength,
+    Offset guide,
+  ) {
+    final Offset delta = end - start;
+    final double distance = delta.distance;
+    if (distance < 0.001) {
+      return Offset.lerp(start, guide, 0.5) ?? start;
+    }
+
+    final double minReach = (upperLength - lowerLength).abs() + 0.001;
+    final double maxReach = upperLength + lowerLength - 0.001;
+    final double clampedDistance = distance.clamp(minReach, maxReach);
+    final Offset direction = delta / distance;
+    final double projection =
+        ((upperLength * upperLength) -
+            (lowerLength * lowerLength) +
+            (clampedDistance * clampedDistance)) /
+        (2 * clampedDistance);
+    final double jointHeight = sqrt(
+      max((upperLength * upperLength) - (projection * projection), 0),
+    );
+    final Offset base = start + (direction * projection);
+    final Offset normal = Offset(-direction.dy, direction.dx);
+    final Offset guideVector = guide - start;
+    final double cross =
+        (direction.dx * guideVector.dy) - (direction.dy * guideVector.dx);
+    final double bendSign = cross >= 0 ? 1 : -1;
+    return base + (normal * jointHeight * bendSign);
   }
 
   _PosePoints _startPose(Size size) {
@@ -288,13 +778,13 @@ class _AthletePainter extends CustomPainter {
       case ExercisePose.dumbbellBenchPress:
         return (
           _PosePoints(
-            headCenter: point(0.64, 0.41),
-            neck: point(0.57, 0.47),
-            hip: point(0.38, 0.58),
-            leftElbow: point(0.50, 0.39),
-            leftHand: point(0.48, 0.28),
-            rightElbow: point(0.66, 0.39),
-            rightHand: point(0.68, 0.28),
+            headCenter: point(0.66, 0.41),
+            neck: point(0.58, 0.48),
+            hip: point(0.39, 0.59),
+            leftElbow: point(0.47, 0.44),
+            leftHand: point(0.41, 0.33),
+            rightElbow: point(0.69, 0.44),
+            rightHand: point(0.75, 0.33),
             leftKnee: point(0.22, 0.62),
             leftFoot: point(0.10, 0.72),
             rightKnee: point(0.18, 0.50),
@@ -303,13 +793,13 @@ class _AthletePainter extends CustomPainter {
             rightGripAngle: pi / 2,
           ),
           _PosePoints(
-            headCenter: point(0.64, 0.41),
-            neck: point(0.57, 0.47),
-            hip: point(0.38, 0.58),
-            leftElbow: point(0.52, 0.33),
-            leftHand: point(0.52, 0.16),
-            rightElbow: point(0.64, 0.33),
-            rightHand: point(0.64, 0.16),
+            headCenter: point(0.66, 0.41),
+            neck: point(0.58, 0.48),
+            hip: point(0.39, 0.59),
+            leftElbow: point(0.51, 0.27),
+            leftHand: point(0.50, 0.11),
+            rightElbow: point(0.65, 0.27),
+            rightHand: point(0.66, 0.11),
             leftKnee: point(0.22, 0.62),
             leftFoot: point(0.10, 0.72),
             rightKnee: point(0.18, 0.50),
@@ -321,34 +811,34 @@ class _AthletePainter extends CustomPainter {
       case ExercisePose.singleArmDumbbellRow:
         return (
           _PosePoints(
-            headCenter: point(0.56, 0.16),
-            neck: point(0.54, 0.28),
-            hip: point(0.45, 0.52),
-            leftElbow: point(0.32, 0.58),
-            leftHand: point(0.24, 0.82),
+            headCenter: point(0.64, 0.22),
+            neck: point(0.58, 0.31),
+            hip: point(0.43, 0.50),
+            leftElbow: point(0.53, 0.56),
+            leftHand: point(0.53, 0.80),
             rightElbow: point(0.62, 0.40),
-            rightHand: point(0.68, 0.28),
-            leftKnee: point(0.34, 0.70),
-            leftFoot: point(0.24, 0.90),
-            rightKnee: point(0.58, 0.70),
-            rightFoot: point(0.72, 0.90),
+            rightHand: point(0.64, 0.50),
+            leftKnee: point(0.39, 0.68),
+            leftFoot: point(0.31, 0.90),
+            rightKnee: point(0.59, 0.66),
+            rightFoot: point(0.71, 0.90),
             leftGripAngle: pi / 2,
-            rightGripAngle: 0,
+            rightGripAngle: pi / 10,
           ),
           _PosePoints(
-            headCenter: point(0.56, 0.16),
-            neck: point(0.54, 0.28),
-            hip: point(0.45, 0.52),
-            leftElbow: point(0.34, 0.54),
-            leftHand: point(0.24, 0.74),
+            headCenter: point(0.64, 0.22),
+            neck: point(0.58, 0.31),
+            hip: point(0.43, 0.50),
+            leftElbow: point(0.36, 0.41),
+            leftHand: point(0.36, 0.65),
             rightElbow: point(0.62, 0.40),
-            rightHand: point(0.68, 0.28),
-            leftKnee: point(0.34, 0.70),
-            leftFoot: point(0.24, 0.90),
-            rightKnee: point(0.58, 0.70),
-            rightFoot: point(0.72, 0.90),
+            rightHand: point(0.64, 0.50),
+            leftKnee: point(0.39, 0.68),
+            leftFoot: point(0.31, 0.90),
+            rightKnee: point(0.59, 0.66),
+            rightFoot: point(0.71, 0.90),
             leftGripAngle: pi / 2,
-            rightGripAngle: 0,
+            rightGripAngle: pi / 10,
           ),
         );
       case ExercisePose.dumbbellShoulderPress:
@@ -357,10 +847,10 @@ class _AthletePainter extends CustomPainter {
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
             hip: point(0.50, 0.53),
-            leftElbow: point(0.38, 0.36),
-            leftHand: point(0.36, 0.24),
-            rightElbow: point(0.62, 0.36),
-            rightHand: point(0.64, 0.24),
+            leftElbow: point(0.39, 0.36),
+            leftHand: point(0.33, 0.27),
+            rightElbow: point(0.61, 0.36),
+            rightHand: point(0.67, 0.27),
             leftKnee: point(0.42, 0.70),
             leftFoot: point(0.36, 0.90),
             rightKnee: point(0.58, 0.70),
@@ -372,10 +862,10 @@ class _AthletePainter extends CustomPainter {
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
             hip: point(0.50, 0.53),
-            leftElbow: point(0.40, 0.28),
-            leftHand: point(0.38, 0.12),
-            rightElbow: point(0.60, 0.28),
-            rightHand: point(0.62, 0.12),
+            leftElbow: point(0.44, 0.20),
+            leftHand: point(0.39, 0.06),
+            rightElbow: point(0.56, 0.20),
+            rightHand: point(0.61, 0.06),
             leftKnee: point(0.42, 0.70),
             leftFoot: point(0.36, 0.90),
             rightKnee: point(0.58, 0.70),
@@ -390,10 +880,10 @@ class _AthletePainter extends CustomPainter {
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
             hip: point(0.50, 0.52),
-            leftElbow: point(0.42, 0.44),
-            leftHand: point(0.38, 0.58),
-            rightElbow: point(0.58, 0.44),
-            rightHand: point(0.62, 0.58),
+            leftElbow: point(0.44, 0.48),
+            leftHand: point(0.34, 0.62),
+            rightElbow: point(0.58, 0.50),
+            rightHand: point(0.60, 0.74),
             leftKnee: point(0.43, 0.70),
             leftFoot: point(0.38, 0.90),
             rightKnee: point(0.57, 0.70),
@@ -405,10 +895,10 @@ class _AthletePainter extends CustomPainter {
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
             hip: point(0.50, 0.52),
-            leftElbow: point(0.42, 0.44),
-            leftHand: point(0.40, 0.26),
-            rightElbow: point(0.58, 0.44),
-            rightHand: point(0.60, 0.26),
+            leftElbow: point(0.44, 0.48),
+            leftHand: point(0.50, 0.34),
+            rightElbow: point(0.58, 0.50),
+            rightHand: point(0.60, 0.74),
             leftKnee: point(0.43, 0.70),
             leftFoot: point(0.38, 0.90),
             rightKnee: point(0.57, 0.70),
@@ -423,10 +913,10 @@ class _AthletePainter extends CustomPainter {
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
             hip: point(0.50, 0.53),
-            leftElbow: point(0.44, 0.26),
-            leftHand: point(0.42, 0.18),
-            rightElbow: point(0.56, 0.26),
-            rightHand: point(0.58, 0.18),
+            leftElbow: point(0.42, 0.28),
+            leftHand: point(0.47, 0.23),
+            rightElbow: point(0.58, 0.28),
+            rightHand: point(0.53, 0.23),
             leftKnee: point(0.42, 0.70),
             leftFoot: point(0.36, 0.90),
             rightKnee: point(0.58, 0.70),
@@ -438,10 +928,10 @@ class _AthletePainter extends CustomPainter {
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
             hip: point(0.50, 0.53),
-            leftElbow: point(0.47, 0.20),
-            leftHand: point(0.48, 0.08),
-            rightElbow: point(0.53, 0.20),
-            rightHand: point(0.52, 0.08),
+            leftElbow: point(0.45, 0.18),
+            leftHand: point(0.48, 0.05),
+            rightElbow: point(0.55, 0.18),
+            rightHand: point(0.52, 0.05),
             leftKnee: point(0.42, 0.70),
             leftFoot: point(0.36, 0.90),
             rightKnee: point(0.58, 0.70),
@@ -455,30 +945,30 @@ class _AthletePainter extends CustomPainter {
           _PosePoints(
             headCenter: point(0.50, 0.16),
             neck: point(0.50, 0.28),
-            hip: point(0.50, 0.49),
-            leftElbow: point(0.40, 0.44),
-            leftHand: point(0.36, 0.52),
-            rightElbow: point(0.60, 0.44),
-            rightHand: point(0.64, 0.52),
-            leftKnee: point(0.44, 0.62),
-            leftFoot: point(0.34, 0.90),
-            rightKnee: point(0.56, 0.62),
-            rightFoot: point(0.66, 0.90),
+            hip: point(0.50, 0.50),
+            leftElbow: point(0.40, 0.47),
+            leftHand: point(0.36, 0.63),
+            rightElbow: point(0.60, 0.47),
+            rightHand: point(0.64, 0.63),
+            leftKnee: point(0.41, 0.66),
+            leftFoot: point(0.41, 0.90),
+            rightKnee: point(0.59, 0.66),
+            rightFoot: point(0.59, 0.90),
             leftGripAngle: pi / 2,
             rightGripAngle: pi / 2,
           ),
           _PosePoints(
-            headCenter: point(0.50, 0.16),
-            neck: point(0.50, 0.28),
-            hip: point(0.50, 0.53),
-            leftElbow: point(0.40, 0.46),
-            leftHand: point(0.34, 0.60),
-            rightElbow: point(0.60, 0.46),
-            rightHand: point(0.66, 0.60),
-            leftKnee: point(0.38, 0.71),
-            leftFoot: point(0.31, 0.90),
-            rightKnee: point(0.62, 0.71),
-            rightFoot: point(0.69, 0.90),
+            headCenter: point(0.50, 0.21),
+            neck: point(0.50, 0.34),
+            hip: point(0.50, 0.65),
+            leftElbow: point(0.41, 0.52),
+            leftHand: point(0.35, 0.70),
+            rightElbow: point(0.59, 0.52),
+            rightHand: point(0.65, 0.70),
+            leftKnee: point(0.39, 0.68),
+            leftFoot: point(0.39, 0.90),
+            rightKnee: point(0.61, 0.68),
+            rightFoot: point(0.61, 0.90),
             leftGripAngle: pi / 2,
             rightGripAngle: pi / 2,
           ),
@@ -486,31 +976,31 @@ class _AthletePainter extends CustomPainter {
       case ExercisePose.dumbbellRomanianDeadlift:
         return (
           _PosePoints(
-            headCenter: point(0.52, 0.16),
-            neck: point(0.50, 0.28),
-            hip: point(0.48, 0.50),
-            leftElbow: point(0.42, 0.42),
-            leftHand: point(0.38, 0.58),
-            rightElbow: point(0.54, 0.42),
-            rightHand: point(0.58, 0.58),
-            leftKnee: point(0.42, 0.68),
+            headCenter: point(0.52, 0.17),
+            neck: point(0.50, 0.29),
+            hip: point(0.50, 0.51),
+            leftElbow: point(0.43, 0.46),
+            leftHand: point(0.41, 0.62),
+            rightElbow: point(0.57, 0.46),
+            rightHand: point(0.59, 0.62),
+            leftKnee: point(0.42, 0.70),
             leftFoot: point(0.36, 0.90),
-            rightKnee: point(0.58, 0.68),
+            rightKnee: point(0.58, 0.70),
             rightFoot: point(0.64, 0.90),
             leftGripAngle: pi / 2,
             rightGripAngle: pi / 2,
           ),
           _PosePoints(
-            headCenter: point(0.54, 0.18),
-            neck: point(0.52, 0.30),
-            hip: point(0.46, 0.55),
-            leftElbow: point(0.42, 0.46),
-            leftHand: point(0.36, 0.72),
-            rightElbow: point(0.52, 0.46),
-            rightHand: point(0.56, 0.72),
-            leftKnee: point(0.42, 0.72),
+            headCenter: point(0.58, 0.23),
+            neck: point(0.54, 0.33),
+            hip: point(0.46, 0.56),
+            leftElbow: point(0.44, 0.56),
+            leftHand: point(0.41, 0.79),
+            rightElbow: point(0.54, 0.56),
+            rightHand: point(0.59, 0.79),
+            leftKnee: point(0.42, 0.75),
             leftFoot: point(0.36, 0.90),
-            rightKnee: point(0.58, 0.72),
+            rightKnee: point(0.58, 0.75),
             rightFoot: point(0.64, 0.90),
             leftGripAngle: pi / 2,
             rightGripAngle: pi / 2,
@@ -519,34 +1009,34 @@ class _AthletePainter extends CustomPainter {
       case ExercisePose.dumbbellCrunch:
         return (
           _PosePoints(
-            headCenter: point(0.60, 0.50),
-            neck: point(0.54, 0.55),
-            hip: point(0.40, 0.64),
-            leftElbow: point(0.58, 0.44),
-            leftHand: point(0.64, 0.34),
-            rightElbow: point(0.50, 0.60),
-            rightHand: point(0.56, 0.64),
+            headCenter: point(0.60, 0.52),
+            neck: point(0.55, 0.58),
+            hip: point(0.40, 0.66),
+            leftElbow: point(0.56, 0.48),
+            leftHand: point(0.61, 0.44),
+            rightElbow: point(0.51, 0.56),
+            rightHand: point(0.56, 0.50),
             leftKnee: point(0.26, 0.70),
             leftFoot: point(0.18, 0.88),
             rightKnee: point(0.28, 0.58),
             rightFoot: point(0.16, 0.73),
-            leftGripAngle: pi / 5,
-            rightGripAngle: pi / 5,
+            leftGripAngle: pi / 8,
+            rightGripAngle: pi / 8,
           ),
           _PosePoints(
-            headCenter: point(0.66, 0.42),
-            neck: point(0.58, 0.48),
+            headCenter: point(0.69, 0.39),
+            neck: point(0.62, 0.47),
             hip: point(0.40, 0.62),
-            leftElbow: point(0.60, 0.36),
-            leftHand: point(0.68, 0.26),
-            rightElbow: point(0.52, 0.56),
-            rightHand: point(0.61, 0.60),
+            leftElbow: point(0.63, 0.35),
+            leftHand: point(0.67, 0.29),
+            rightElbow: point(0.58, 0.44),
+            rightHand: point(0.63, 0.38),
             leftKnee: point(0.26, 0.70),
             leftFoot: point(0.18, 0.88),
             rightKnee: point(0.28, 0.58),
             rightFoot: point(0.16, 0.73),
-            leftGripAngle: pi / 5,
-            rightGripAngle: pi / 5,
+            leftGripAngle: pi / 8,
+            rightGripAngle: pi / 8,
           ),
         );
     }
@@ -608,4 +1098,11 @@ class _PosePoints {
           a.rightGripAngle + ((b.rightGripAngle - a.rightGripAngle) * t),
     );
   }
+}
+
+class _ResolvedLimb {
+  const _ResolvedLimb({required this.joint, required this.end});
+
+  final Offset joint;
+  final Offset end;
 }

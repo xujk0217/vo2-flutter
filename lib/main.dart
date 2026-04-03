@@ -54,8 +54,10 @@ class _DashboardPageState extends State<DashboardPage> {
   final BluetoothBridge _bridge = BluetoothBridge();
   late ExerciseType _exercise;
   late MotionEstimator _estimator;
+  late DateTime _exerciseStartedAt;
 
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
+  Timer? _vo2Ticker;
   List<BluetoothDeviceInfo> _devices = <BluetoothDeviceInfo>[];
 
   String? _selectedAddress;
@@ -79,6 +81,7 @@ class _DashboardPageState extends State<DashboardPage> {
   int _parseFailureCount = 0;
   int _selectedPpgChannel = 0;
   DateTime? _lastSampleAt;
+  DateTime? _lastAnimatedRepAt;
   final List<PpgFrame> _ppgFrames = <PpgFrame>[];
 
   @override
@@ -86,7 +89,17 @@ class _DashboardPageState extends State<DashboardPage> {
     super.initState();
     _exercise = randomExercise();
     _estimator = MotionEstimator(exercise: _exercise);
+    _exerciseStartedAt = DateTime.now();
     _eventSubscription = _bridge.events().listen(_handleBluetoothEvent);
+    _refreshEstimatedVo2();
+    _vo2Ticker = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _refreshEstimatedVo2();
+      });
+    });
     unawaited(_loadProfile());
     unawaited(_bootstrap());
   }
@@ -98,6 +111,7 @@ class _DashboardPageState extends State<DashboardPage> {
     }
     setState(() {
       _userProfile = profile;
+      _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
     });
   }
 
@@ -220,10 +234,19 @@ class _DashboardPageState extends State<DashboardPage> {
     switch (type) {
       case 'status':
         final String state = event['state'] as String? ?? '';
+        final bool wasConnected = _isConnected;
+        final bool nowConnected = state == 'connected';
         setState(() {
           _statusMessage = event['message'] as String? ?? '藍牙狀態更新';
           _isConnecting = state == 'connecting';
-          _isConnected = state == 'connected';
+          _isConnected = nowConnected;
+          if (!wasConnected && nowConnected) {
+            _startExerciseSession();
+          } else if (wasConnected && !nowConnected) {
+            _stopExerciseSession();
+          } else {
+            _refreshEstimatedVo2();
+          }
         });
         break;
       case 'error':
@@ -231,6 +254,7 @@ class _DashboardPageState extends State<DashboardPage> {
           _statusMessage = event['message'] as String? ?? '藍牙錯誤';
           _isConnecting = false;
           _isConnected = false;
+          _stopExerciseSession();
         });
         break;
       case 'data':
@@ -248,8 +272,6 @@ class _DashboardPageState extends State<DashboardPage> {
 
         final DerivedMetrics metrics = _estimator.absorb(sample);
         setState(() {
-          _rawEstimatedVo2 = metrics.estimatedVo2;
-          _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
           _signalScore = metrics.signalScore;
           _motionScore = metrics.motionScore;
           _sampleCount += 1;
@@ -257,6 +279,7 @@ class _DashboardPageState extends State<DashboardPage> {
           _lastSampleAt = DateTime.now();
           _parseFailureCount = 0;
           _appendPpgSample(sample.ppg);
+          _refreshEstimatedVo2();
         });
         break;
     }
@@ -277,9 +300,11 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {
       _exercise = randomExercise();
       _estimator = MotionEstimator(exercise: _exercise);
-      _animatedRepetitions = 0;
-      _rawEstimatedVo2 = 0;
-      _estimatedVo2 = 0;
+      if (_isConnected) {
+        _startExerciseSession();
+      } else {
+        _stopExerciseSession();
+      }
       _signalScore = 0;
       _motionScore = 0;
       _sampleCount = 0;
@@ -292,28 +317,108 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _handleAnimationRepCompleted() {
-    if (!mounted) {
+    if (!mounted || !_isConnected) {
       return;
     }
     setState(() {
+      _lastAnimatedRepAt = DateTime.now();
       _animatedRepetitions += 1;
+      _refreshEstimatedVo2();
     });
   }
 
   double _applyProfileAdjustment(double rawVo2) {
-    double adjusted = rawVo2;
-    adjusted += (_userProfile.heightCm - 170) * 0.015;
-    adjusted -= (_userProfile.weightKg - 70) * 0.025;
-    adjusted -= max(_userProfile.age - 30, 0) * 0.06;
+    final double effort = max(rawVo2 - 15.0, 0);
+    double multiplier = 1.0;
+    multiplier += (_userProfile.heightCm - 170) * 0.0015;
+    multiplier -= (_userProfile.weightKg - 70) * 0.0022;
+    multiplier -= max(_userProfile.age - 30, 0) * 0.0018;
     switch (_userProfile.sex) {
       case UserSex.male:
-        adjusted += 0.8;
+        multiplier += 0.025;
       case UserSex.female:
-        adjusted -= 0.8;
+        multiplier -= 0.025;
       case UserSex.other:
         break;
     }
-    return adjusted.clamp(18.0, 65.0);
+    final double adjustedEffort = effort * multiplier.clamp(0.82, 1.18);
+    return (15.0 + adjustedEffort).clamp(15.0, 30.0);
+  }
+
+  void _refreshEstimatedVo2() {
+    _rawEstimatedVo2 = _computeExerciseVo2();
+    _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
+  }
+
+  int _fatigueLevel() {
+    final double normalized = ((_estimatedVo2 - 15.0) / 15.0).clamp(0.0, 1.0);
+    return (1 + (normalized * 9)).round().clamp(1, 10);
+  }
+
+  String _fatigueLabel() {
+    final int level = _fatigueLevel();
+    if (level <= 2) {
+      return '很低';
+    }
+    if (level <= 4) {
+      return '偏低';
+    }
+    if (level <= 6) {
+      return '中等';
+    }
+    if (level <= 8) {
+      return '偏高';
+    }
+    return '很高';
+  }
+
+  void _startExerciseSession() {
+    _exerciseStartedAt = DateTime.now();
+    _lastAnimatedRepAt = null;
+    _animatedRepetitions = 0;
+    _rawEstimatedVo2 = 15;
+    _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
+  }
+
+  void _stopExerciseSession() {
+    _lastAnimatedRepAt = null;
+    _animatedRepetitions = 0;
+    _rawEstimatedVo2 = 15;
+    _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
+  }
+
+  double _computeExerciseVo2() {
+    if (!_isConnected) {
+      return 15;
+    }
+    final DateTime now = DateTime.now();
+    final double elapsedSeconds =
+        now.difference(_exerciseStartedAt).inMilliseconds / 1000;
+    final double timeTrend = min(8.5, elapsedSeconds * 0.035);
+    final double repetitionTrend = min(5.8, _animatedRepetitions * 0.16);
+    final double signalBoost = min(0.9, max(_signalScore - 4.8, 0) * 0.45);
+    final double motionBoost = min(1.4, max(_motionScore - 0.9, 0) * 0.55);
+    final double cadenceLift;
+    if (_lastAnimatedRepAt == null) {
+      cadenceLift = 0;
+    } else {
+      final double secondsSinceRep =
+          now.difference(_lastAnimatedRepAt!).inMilliseconds / 1000;
+      cadenceLift = max(0, 5 - secondsSinceRep) * 0.16;
+    }
+    final double waveA = sin(elapsedSeconds / 5.4) * 0.35;
+    final double waveB =
+        sin((elapsedSeconds / 2.8) + (_animatedRepetitions * 0.55)) * 0.18;
+
+    return (15 +
+            timeTrend +
+            repetitionTrend +
+            signalBoost +
+            motionBoost +
+            cadenceLift +
+            waveA +
+            waveB)
+        .clamp(15.0, 30.0);
   }
 
   Future<void> _openProfileSettings() async {
@@ -349,6 +454,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _eventSubscription?.cancel();
+    _vo2Ticker?.cancel();
     unawaited(_bridge.disconnect());
     super.dispose();
   }
@@ -400,6 +506,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 height: 320,
                 child: ExerciseIllustrationCard(
                   exercise: _exercise,
+                  isActive: _isConnected,
                   onRepCompleted: _handleAnimationRepCompleted,
                 ),
               ),
@@ -455,12 +562,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     tone: const Color(0xFFEA580C),
                   ),
                   _MetricCard(
-                    title: 'PPG / IMU 指標',
-                    value: _sampleCount == 0
-                        ? '--'
-                        : '${_signalScore.toStringAsFixed(2)} / ${_motionScore.toStringAsFixed(2)}',
-                    unit: 'signal / motion',
-                    tone: const Color(0xFF16A34A),
+                    title: '疲勞指標',
+                    value: _fatigueLevel().toString(),
+                    unit: '/ 10 ${_fatigueLabel()}',
+                    tone: const Color(0xFFDC2626),
                   ),
                 ],
               ),
