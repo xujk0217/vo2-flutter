@@ -29,6 +29,7 @@ class DeviceProtocolSession extends ChangeNotifier {
   double? _calibrationProgress;
   CalibrationDonePayload? _calibrationDone;
   ErrorPayload? _protocolError;
+  Vo2PredictionPayload? _latestVo2Prediction;
 
   // ── Public accessors ──────────────────────────────────────────────────────
 
@@ -45,6 +46,8 @@ class DeviceProtocolSession extends ChangeNotifier {
   CalibrationDonePayload? get calibrationDone => _calibrationDone;
 
   ErrorPayload? get protocolError => _protocolError;
+
+  Vo2PredictionPayload? get latestVo2Prediction => _latestVo2Prediction;
 
   // ── Profile management ────────────────────────────────────────────────────
 
@@ -174,6 +177,13 @@ class DeviceProtocolSession extends ChangeNotifier {
         if (p == null) return;
         _calibrationState = DeviceProtocolCalibrationState.error;
         _protocolError = p;
+        notifyListeners();
+
+      case DeviceMessageType.vo2Prediction:
+        final Vo2PredictionPayload? p =
+            result.typedPayload as Vo2PredictionPayload?;
+        if (p == null) return;
+        _latestVo2Prediction = p;
         notifyListeners();
 
       // Ignored message types – no writes, no state changes.

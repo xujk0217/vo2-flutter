@@ -429,5 +429,35 @@ void main() {
         expect(session.protocolError!.message, 'not_streaming');
       },
     );
+
+    test(
+      'vo2_prediction updates latest VO2 prediction and notifies listeners',
+      () async {
+        final writer = _FakeDeviceProtocolFrameWriter();
+        final DeviceProtocolSession session = DeviceProtocolSession(
+          writer: writer,
+          initialProfile: _defaultProfile,
+        );
+        int notifications = 0;
+        session.addListener(() {
+          notifications += 1;
+        });
+        final Uint8List predictionPayload = Uint8List(12);
+        ByteData.sublistView(predictionPayload)
+          ..setUint64(0, 123456789, Endian.little)
+          ..setFloat32(8, 42.5, Endian.little);
+
+        await session.handleDataEvent(
+          _bleDataEvent(DeviceMessageType.vo2Prediction, 4, predictionPayload),
+        );
+
+        expect(session.latestVo2Prediction, isA<Vo2PredictionPayload>());
+        expect(session.latestVo2Prediction!.timestampNs, 123456789);
+        expect(session.latestVo2Prediction!.vo2MlKgMin, closeTo(42.5, 0.001));
+        expect(session.calibrationState, DeviceProtocolCalibrationState.idle);
+        expect(writer.writtenFrames, isEmpty);
+        expect(notifications, 1);
+      },
+    );
   });
 }

@@ -64,8 +64,10 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
       ),
       initialRoute: DashboardPage.routeName,
       routes: <String, WidgetBuilder>{
-        DashboardPage.routeName: (_) =>
-            DashboardPage(connectionController: _connectionController),
+        DashboardPage.routeName: (_) => DashboardPage(
+          connectionController: _connectionController,
+          protocolSession: _protocolSession,
+        ),
         OnboardingScreen.routeName: (_) => const OnboardingScreen(),
         ConnectionScreen.routeName: (_) =>
             ConnectionScreen(connectionController: _connectionController),

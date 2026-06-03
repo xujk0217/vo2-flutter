@@ -8,6 +8,7 @@ import 'package:vo2_flutter/models/workout_models.dart';
 import 'package:vo2_flutter/ppg_waveform_card.dart';
 import 'package:vo2_flutter/receiver/classic_bluetooth_transport.dart';
 import 'package:vo2_flutter/receiver/device_protocol.dart';
+import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
 import 'package:vo2_flutter/receiver/receiver_transport.dart';
 import 'package:vo2_flutter/sensor_processing.dart';
@@ -24,11 +25,14 @@ class DashboardPage extends StatefulWidget {
   const DashboardPage({
     super.key,
     ReceiverConnectionController? connectionController,
-  }) : _connectionController = connectionController;
+    DeviceProtocolSession? protocolSession,
+  }) : _connectionController = connectionController,
+       _protocolSession = protocolSession;
 
   static const String routeName = '/dashboard';
 
   final ReceiverConnectionController? _connectionController;
+  final DeviceProtocolSession? _protocolSession;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -39,6 +43,7 @@ class _DashboardPageState extends State<DashboardPage> {
   final Random _random = Random();
   late final ReceiverConnectionController _connectionController;
   late final bool _ownsConnectionController;
+  DeviceProtocolSession? _protocolSession;
   late ExerciseType _exercise;
   late MotionEstimator _estimator;
 
@@ -91,6 +96,8 @@ class _DashboardPageState extends State<DashboardPage> {
     _connectionController
       ..setDataListener(_handleReceiverData)
       ..addListener(_handleConnectionChanged);
+    _protocolSession = widget._protocolSession;
+    _protocolSession?.addListener(_handleProtocolSessionChanged);
     _exercise = randomExercise();
     _estimator = MotionEstimator(exercise: _exercise);
     _refreshEstimatedVo2();
@@ -109,6 +116,12 @@ class _DashboardPageState extends State<DashboardPage> {
 
   bool get _isWorkoutRunning => _workoutPhase == WorkoutPhase.active;
   bool get _isWorkoutPreparing => _workoutPhase == WorkoutPhase.countdown;
+  double get _displayVo2 =>
+      _protocolSession?.latestVo2Prediction?.vo2MlKgMin ?? _estimatedVo2;
+  bool get _hasProtocolVo2Prediction =>
+      _protocolSession?.latestVo2Prediction != null;
+  bool get _shouldShowVo2Metric =>
+      _shouldShowMetrics || _hasProtocolVo2Prediction;
   bool get _hasWorkoutSession =>
       _workoutPhase != WorkoutPhase.idle || _sessionStartedAt != null;
   bool get _shouldShowMetrics {
@@ -151,6 +164,13 @@ class _DashboardPageState extends State<DashboardPage> {
         _refreshEstimatedVo2();
       }
     });
+  }
+
+  void _handleProtocolSessionChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
   }
 
   void _handleReceiverData(ReceiverDataEvent event) {
@@ -250,7 +270,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   int _fatigueLevel() {
-    final double normalized = ((_estimatedVo2 - 8.0) / 22.0).clamp(0.0, 1.0);
+    final double normalized = ((_displayVo2 - 8.0) / 22.0).clamp(0.0, 1.0);
     return (1 + (normalized * 9)).round().clamp(1, 10);
   }
 
@@ -310,7 +330,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Color _fatigueBackground() {
     final int level = _fatigueLevel();
-    if (!_shouldShowMetrics) {
+    if (!_shouldShowVo2Metric) {
       return Colors.white;
     }
     if (level <= 3) {
@@ -629,7 +649,7 @@ class _DashboardPageState extends State<DashboardPage> {
     }
     final DateTime startedAt = _sessionStartedAt ?? DateTime.now();
     final DateTime endedAt = DateTime.now();
-    final double finalVo2 = _estimatedVo2;
+    final double finalVo2 = _displayVo2;
     final int finalFatigue = _fatigueLevel();
 
     setState(() {
@@ -1158,6 +1178,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _connectionController
       ..removeListener(_handleConnectionChanged)
       ..setDataListener(null);
+    _protocolSession?.removeListener(_handleProtocolSessionChanged);
     _vo2Ticker?.cancel();
     _countdownTimer?.cancel();
     _cancelWarningTimers();
@@ -1243,13 +1264,13 @@ class _DashboardPageState extends State<DashboardPage> {
                   Expanded(
                     child: MetricCard(
                       title: '疲勞指標 (VO2)',
-                      value: _shouldShowMetrics
+                      value: _shouldShowVo2Metric
                           ? _fatigueLevel().toString()
                           : '--',
-                      secondaryText: _shouldShowMetrics
-                          ? 'VO2 ${_estimatedVo2.toStringAsFixed(1)}'
+                      secondaryText: _shouldShowVo2Metric
+                          ? 'VO2 ${_displayVo2.toStringAsFixed(1)}'
                           : null,
-                      unit: _shouldShowMetrics
+                      unit: _shouldShowVo2Metric
                           ? '/ 10 ${_fatigueLabel()}'
                           : '等待資料穩定',
                       tone: const Color(0xFFDC2626),

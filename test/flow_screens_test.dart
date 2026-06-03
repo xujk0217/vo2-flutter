@@ -338,5 +338,50 @@ void main() {
       expect(find.text('已收到原始資料，但格式尚未解析成功。'), findsNothing);
       expect(find.text('已接收樣本：0'), findsOneWidget);
     });
+
+    testWidgets('displays injected protocol VO2 prediction when available', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+      final DeviceProtocolSession session = DeviceProtocolSession();
+      final Uint8List predictionPayload = Uint8List(12);
+      ByteData.sublistView(predictionPayload)
+        ..setUint64(0, 123456789, Endian.little)
+        ..setFloat32(8, 42.5, Endian.little);
+
+      await tester.pumpWidget(
+        wrap(
+          DashboardPage(
+            connectionController: controller,
+            protocolSession: session,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      transport.eventController.add(
+        const ReceiverStatusEvent(state: 'connected', message: 'Connected.'),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('開始訓練'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump(const Duration(seconds: 10));
+
+      await session.handleDataEvent(
+        _bleDataEvent(DeviceMessageType.vo2Prediction, 1, predictionPayload),
+      );
+      await tester.pump();
+
+      expect(find.text('VO2 42.5'), findsOneWidget);
+      expect(find.text('已接收樣本：0'), findsOneWidget);
+    });
   });
 }
