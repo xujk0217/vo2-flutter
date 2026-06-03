@@ -8,11 +8,15 @@ class ExerciseIllustrationCard extends StatefulWidget {
     super.key,
     required this.exercise,
     required this.isActive,
+    required this.repetitions,
+    required this.statusText,
     required this.onRepCompleted,
   });
 
   final ExerciseType exercise;
   final bool isActive;
+  final int repetitions;
+  final String statusText;
   final VoidCallback onRepCompleted;
 
   @override
@@ -126,8 +130,49 @@ class _ExerciseIllustrationCardState extends State<ExerciseIllustrationCard>
                   ),
                 ),
               ),
+              Positioned(
+                right: 18,
+                bottom: 14,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.22),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          '次數: ',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: Colors.white.withValues(alpha: 0.88),
+                                fontWeight: FontWeight.w500,
+                              ),
+                        ),
+                        Text(
+                          '${widget.repetitions}',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 72),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
@@ -148,24 +193,32 @@ class _ExerciseIllustrationCardState extends State<ExerciseIllustrationCard>
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      widget.isActive
-                          ? '藍牙已連線，示意圖會循環動作並同步累加次數'
-                          : '等待藍牙連線後開始動作與計次',
+                      widget.statusText,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Colors.white.withValues(alpha: 0.85),
                       ),
                     ),
-                    const Spacer(),
-                    SizedBox(
-                      height: 180,
-                      width: double.infinity,
-                      child: CustomPaint(
-                        painter: _AthletePainter(
-                          pose: widget.exercise.pose,
-                          progress: Curves.easeInOut.transform(
-                            _controller.value,
-                          ),
-                        ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder:
+                            (BuildContext context, BoxConstraints constraints) {
+                              return Align(
+                                alignment: Alignment.bottomCenter,
+                                child: SizedBox(
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  child: CustomPaint(
+                                    painter: _AthletePainter(
+                                      pose: widget.exercise.pose,
+                                      progress: Curves.easeInOut.transform(
+                                        _controller.value,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
                       ),
                     ),
                   ],

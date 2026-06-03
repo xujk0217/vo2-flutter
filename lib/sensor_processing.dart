@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:vo2_flutter/exercise_catalog.dart';
+import 'package:vo2_flutter/receiver/raw_sensor_payload_parser.dart';
 
 class SensorSample {
   const SensorSample({
@@ -35,6 +36,23 @@ class SensorSample {
   double get gyroMagnitude => sqrt((gx * gx) + (gy * gy) + (gz * gz));
 
   static SensorSample? tryParse(String line) {
+    return const CsvSensorSampleParser().tryParse(line);
+  }
+
+  static double? parseNumber(String value) {
+    final String sanitized = value.trim();
+    if (sanitized.isEmpty) {
+      return null;
+    }
+    return double.tryParse(sanitized);
+  }
+}
+
+class CsvSensorSampleParser implements RawSensorPayloadParser<SensorSample> {
+  const CsvSensorSampleParser();
+
+  @override
+  SensorSample? tryParse(String line) {
     final List<String> parts = line.split(',');
     if (parts.length < 15) {
       return null;
@@ -46,19 +64,19 @@ class SensorSample {
     }
 
     final List<double?> ppg = <double?>[
-      _parseNumber(parts[4]),
-      _parseNumber(parts[5]),
-      _parseNumber(parts[6]),
-      _parseNumber(parts[7]),
-      _parseNumber(parts[8]),
+      SensorSample.parseNumber(parts[4]),
+      SensorSample.parseNumber(parts[5]),
+      SensorSample.parseNumber(parts[6]),
+      SensorSample.parseNumber(parts[7]),
+      SensorSample.parseNumber(parts[8]),
     ];
     final List<double?> imu = <double?>[
-      _parseNumber(parts[9]),
-      _parseNumber(parts[10]),
-      _parseNumber(parts[11]),
-      _parseNumber(parts[12]),
-      _parseNumber(parts[13]),
-      _parseNumber(parts[14]),
+      SensorSample.parseNumber(parts[9]),
+      SensorSample.parseNumber(parts[10]),
+      SensorSample.parseNumber(parts[11]),
+      SensorSample.parseNumber(parts[12]),
+      SensorSample.parseNumber(parts[13]),
+      SensorSample.parseNumber(parts[14]),
     ];
 
     if (ppg.any((double? value) => value == null) ||
@@ -76,14 +94,6 @@ class SensorSample {
       gz: imu[5]!,
       rawLine: line,
     );
-  }
-
-  static double? _parseNumber(String value) {
-    final String sanitized = value.trim();
-    if (sanitized.isEmpty) {
-      return null;
-    }
-    return double.tryParse(sanitized);
   }
 }
 
