@@ -59,6 +59,10 @@ class DeviceFrame {
   final List<int> payload;
 }
 
+abstract interface class DeviceProtocolFrameWriter {
+  Future<void> writeFrame(DeviceFrame frame);
+}
+
 class DeviceProtocolCodec {
   const DeviceProtocolCodec();
 

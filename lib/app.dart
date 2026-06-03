@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:vo2_flutter/receiver/classic_bluetooth_transport.dart';
+import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
+import 'package:vo2_flutter/receiver/receiver_transport.dart';
 import 'package:vo2_flutter/screens/calibration_screen.dart';
 import 'package:vo2_flutter/screens/connection_screen.dart';
 import 'package:vo2_flutter/screens/dashboard_page.dart';
@@ -15,19 +19,28 @@ class Vo2MotionApp extends StatefulWidget {
 
 class _Vo2MotionAppState extends State<Vo2MotionApp> {
   late final ReceiverConnectionController _connectionController;
+  late final DeviceProtocolSession _protocolSession;
+  late final void Function(ReceiverDataEvent event) _protocolDataListener;
 
   @override
   void initState() {
     super.initState();
+    _protocolSession = DeviceProtocolSession();
+    _protocolDataListener = (ReceiverDataEvent event) {
+      unawaited(_protocolSession.handleDataEvent(event));
+    };
     _connectionController = ReceiverConnectionController(
       transport: ClassicBluetoothTransport(),
       preferredDeviceId: kReferenceDeviceAddress,
     );
+    _connectionController.addDataListener(_protocolDataListener);
   }
 
   @override
   void dispose() {
+    _connectionController.removeDataListener(_protocolDataListener);
     _connectionController.dispose();
+    _protocolSession.dispose();
     super.dispose();
   }
 
@@ -56,7 +69,8 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
         OnboardingScreen.routeName: (_) => const OnboardingScreen(),
         ConnectionScreen.routeName: (_) =>
             ConnectionScreen(connectionController: _connectionController),
-        CalibrationScreen.routeName: (_) => const CalibrationScreen(),
+        CalibrationScreen.routeName: (_) =>
+            CalibrationScreen(protocolSession: _protocolSession),
       },
     );
   }

@@ -208,6 +208,39 @@ void main() {
       },
     );
 
+    test('can be used as DeviceProtocolFrameWriter', () async {
+      final _FakeBleBridgeClient client = _FakeBleBridgeClient();
+      final BleReceiverTransport transport = BleReceiverTransport(
+        bridgeClient: client,
+      );
+
+      // Cast to the narrow interface — red until BleReceiverTransport
+      // implements DeviceProtocolFrameWriter.
+      final DeviceProtocolFrameWriter writer =
+          transport as DeviceProtocolFrameWriter;
+
+      const DeviceProfilePayload profilePayload = DeviceProfilePayload(
+        heightCm: 180,
+        weightKg: 75,
+        age: 30,
+        sex: 1,
+      );
+      await writer.writeFrame(
+        DeviceFrame(
+          messageType: DeviceMessageType.profile,
+          seq: 1,
+          payload: profilePayload.encode(),
+        ),
+      );
+
+      final DeviceFrame writtenFrame = const DeviceProtocolCodec().decode(
+        Uint8List.fromList(client.writtenBytes!),
+      );
+      expect(writtenFrame.messageType, DeviceMessageType.profile);
+      expect(writtenFrame.seq, 1);
+      expect(writtenFrame.payload, profilePayload.encode());
+    });
+
     test('maps BLE status and error events', () async {
       final _FakeBleBridgeClient client = _FakeBleBridgeClient();
       final BleReceiverTransport transport = BleReceiverTransport(

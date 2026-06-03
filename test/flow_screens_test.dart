@@ -5,12 +5,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vo2_flutter/receiver/device_protocol.dart';
+import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
 import 'package:vo2_flutter/receiver/receiver_transport.dart';
 import 'package:vo2_flutter/screens/calibration_screen.dart';
 import 'package:vo2_flutter/screens/connection_screen.dart';
 import 'package:vo2_flutter/screens/dashboard_page.dart';
 import 'package:vo2_flutter/screens/onboarding_screen.dart';
+import 'package:vo2_flutter/user_profile.dart';
 
 class _FakeReceiverTransport implements ReceiverTransport {
   final StreamController<ReceiverTransportEvent> eventController =
@@ -41,6 +43,26 @@ class _FakeReceiverTransport implements ReceiverTransport {
 
   @override
   Future<bool> requestPermissions() async => true;
+}
+
+class _FakeDeviceProtocolFrameWriter implements DeviceProtocolFrameWriter {
+  final List<DeviceFrame> writtenFrames = <DeviceFrame>[];
+
+  @override
+  Future<void> writeFrame(DeviceFrame frame) async {
+    writtenFrames.add(frame);
+  }
+}
+
+ReceiverDataEvent _bleDataEvent(int messageType, int seq, List<int> payload) {
+  return ReceiverDataEvent(
+    payload: jsonEncode(<String, dynamic>{
+      'messageType': messageType,
+      'flags': 0,
+      'seq': seq,
+      'payloadBase64': base64Encode(Uint8List.fromList(payload)),
+    }),
+  );
 }
 
 ReceiverConnectionController _connectionController() {
@@ -158,6 +180,103 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Dashboard'), findsOneWidget);
+    });
+
+    testWidgets('protocol mode sends profile and calibration command', (
+      WidgetTester tester,
+    ) async {
+      final _FakeDeviceProtocolFrameWriter writer =
+          _FakeDeviceProtocolFrameWriter();
+      const UserProfile profile = UserProfile(
+        heightCm: 180,
+        weightKg: 75,
+        age: 35,
+        sex: UserSex.female,
+      );
+      final DeviceProtocolSession session = DeviceProtocolSession(
+        writer: writer,
+        initialProfile: profile,
+      );
+
+      await tester.pumpWidget(
+        wrap(CalibrationScreen(protocolSession: session, profile: profile)),
+      );
+
+      await tester.tap(find.text('開始校正'));
+      await tester.pump();
+
+      expect(writer.writtenFrames, hasLength(2));
+      expect(writer.writtenFrames[0].messageType, DeviceMessageType.profile);
+      expect(writer.writtenFrames[0].payload[5], 1);
+      expect(
+        writer.writtenFrames[1].messageType,
+        DeviceMessageType.calibrationStart,
+      );
+      expect(find.text('校正中，請保持靜止...'), findsOneWidget);
+    });
+
+    testWidgets('protocol mode displays calibration progress', (
+      WidgetTester tester,
+    ) async {
+      final _FakeDeviceProtocolFrameWriter writer =
+          _FakeDeviceProtocolFrameWriter();
+      final DeviceProtocolSession session = DeviceProtocolSession(
+        writer: writer,
+      );
+      final Uint8List progressPayload = Uint8List(5);
+      ByteData.sublistView(progressPayload)
+        ..setUint32(0, 15000, Endian.little)
+        ..setUint8(4, 78);
+
+      await tester.pumpWidget(
+        wrap(CalibrationScreen(protocolSession: session)),
+      );
+      await tester.tap(find.text('開始校正'));
+      await tester.pump();
+
+      await session.handleDataEvent(
+        _bleDataEvent(
+          DeviceMessageType.calibrationProgress,
+          1,
+          progressPayload,
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('已進行 15 秒'), findsOneWidget);
+      expect(find.text('心率估計：78 bpm'), findsOneWidget);
+    });
+
+    testWidgets('protocol mode displays calibration result', (
+      WidgetTester tester,
+    ) async {
+      final _FakeDeviceProtocolFrameWriter writer =
+          _FakeDeviceProtocolFrameWriter();
+      final DeviceProtocolSession session = DeviceProtocolSession(
+        writer: writer,
+      );
+      final Uint8List donePayload = Uint8List(9);
+      ByteData.sublistView(donePayload)
+        ..setUint8(0, 64)
+        ..setUint8(1, 88)
+        ..setUint16(2, 240, Endian.little)
+        ..setUint32(4, 30000, Endian.little)
+        ..setUint8(8, 0);
+
+      await tester.pumpWidget(
+        wrap(CalibrationScreen(protocolSession: session)),
+      );
+      await tester.tap(find.text('開始校正'));
+      await tester.pump();
+
+      await session.handleDataEvent(
+        _bleDataEvent(DeviceMessageType.calibrationDone, 2, donePayload),
+      );
+      await tester.pump();
+
+      expect(find.text('校正完成！'), findsOneWidget);
+      expect(find.text('品質分數：88'), findsOneWidget);
+      expect(find.text('樣本數：240'), findsOneWidget);
     });
   });
 

@@ -20,6 +20,8 @@ class ReceiverConnectionController extends ChangeNotifier {
   StreamSubscription<ReceiverTransportEvent>? _eventSubscription;
   Future<void>? _bootstrapOperation;
   void Function(ReceiverDataEvent event)? _onData;
+  final List<void Function(ReceiverDataEvent event)> _dataListeners =
+      <void Function(ReceiverDataEvent event)>[];
 
   List<ReceiverDeviceInfo> _devices = <ReceiverDeviceInfo>[];
   String? _selectedDeviceId;
@@ -42,6 +44,14 @@ class ReceiverConnectionController extends ChangeNotifier {
 
   void setDataListener(void Function(ReceiverDataEvent event)? onData) {
     _onData = onData;
+  }
+
+  void addDataListener(void Function(ReceiverDataEvent event) listener) {
+    _dataListeners.add(listener);
+  }
+
+  void removeDataListener(void Function(ReceiverDataEvent event) listener) {
+    _dataListeners.remove(listener);
   }
 
   void reportStatus(String message) {
@@ -186,6 +196,10 @@ class ReceiverConnectionController extends ChangeNotifier {
         notifyListeners();
       case ReceiverDataEvent():
         _onData?.call(event);
+        for (final void Function(ReceiverDataEvent event) listener
+            in _dataListeners) {
+          listener(event);
+        }
     }
   }
 

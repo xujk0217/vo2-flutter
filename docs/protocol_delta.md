@@ -22,8 +22,10 @@ This note records how the current device specification differs from the earlier 
 - `lib/receiver/device_protocol.dart` provides a pure Dart TLV frame codec and payload helpers.
 - `BleReceiverTransport` surfaces decoded TLV frames as JSON strings through `ReceiverDataEvent.payload`. These strings are parsed by `DeviceProtocolJsonParser` (or equivalent pure Dart helpers) for event handling.
 - `DashboardPage` identifies and ignores these BLE protocol JSON strings. This prevents the generic CSV parser from attempting to process TLV frames, while the legacy Classic Bluetooth CSV path remains the default app transport.
-- This slice implements the parser and dashboard guard only; it does not switch the default transport to BLE, nor does it implement profile/calibration handshakes or VO2 prediction UI routing.
-- A Dart-side BLE transport seam exists for scan/connect/write/notify events and TLV chunk reassembly; native Android BLE scanning, GATT write/notify handling, MTU chunking, and Classic TLV byte-stream platform code are not newly implemented or verified on hardware in this slice.
+- `DeviceProtocolSession` owns app-level protocol state for profile response, `calibration_start`, `calibration_progress`, `calibration_done`, and protocol error events. It observes receiver data through `ReceiverConnectionController.addDataListener` so Dashboard CSV handling can coexist with protocol event handling.
+- `CalibrationScreen` can use a writable `DeviceProtocolSession` for device-backed calibration progress/done display. When no protocol writer is available, including the current Classic default app path, it keeps the local 30 second countdown fallback.
+- This slice does not switch the default transport to BLE, does not auto-select BLE devices, and does not route `vo2_prediction` into Dashboard UI yet.
+- A Dart-side BLE transport seam exists for scan/connect/write/notify events and TLV chunk reassembly; native Android BLE scanning, GATT write/notify handling, MTU chunking, and Classic TLV byte-stream platform code still require hardware verification before BLE becomes the default path.
 
 ## Current-Version Flow Target
 

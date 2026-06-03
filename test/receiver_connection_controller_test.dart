@@ -131,6 +131,38 @@ void main() {
       await controller.disposeAsync();
     });
 
+    test('forwards data events to multiple listeners', () async {
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final List<String> received1 = <String>[];
+      final List<String> received2 = <String>[];
+
+      void cb1(ReceiverDataEvent event) {
+        received1.add(event.payload);
+      }
+
+      void cb2(ReceiverDataEvent event) {
+        received2.add(event.payload);
+      }
+
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+
+      controller.addDataListener(cb1);
+      controller.addDataListener(cb2);
+
+      transport.eventController.add(
+        const ReceiverDataEvent(payload: 'payload'),
+      );
+      await pumpEventQueue();
+
+      expect(received1, <String>['payload']);
+      expect(received2, <String>['payload']);
+
+      controller.removeDataListener(cb1);
+      controller.removeDataListener(cb2);
+      await controller.disposeAsync();
+    });
+
     test('coalesces concurrent bootstrap calls', () async {
       final Completer<bool> permissionsCompleter = Completer<bool>();
       final _FakeReceiverTransport transport =

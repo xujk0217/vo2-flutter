@@ -94,7 +94,8 @@ class BleBridgeClientAdapter implements BleBridgeClient {
   }
 }
 
-class BleReceiverTransport implements ReceiverTransport {
+class BleReceiverTransport
+    implements ReceiverTransport, DeviceProtocolFrameWriter {
   BleReceiverTransport({
     BleBridgeClient? bridgeClient,
     DeviceProtocolCodec codec = const DeviceProtocolCodec(),
@@ -142,6 +143,7 @@ class BleReceiverTransport implements ReceiverTransport {
   @override
   Future<bool> requestPermissions() => _bridgeClient.requestPermissions();
 
+  @override
   Future<void> writeFrame(DeviceFrame frame) {
     return _bridgeClient.write(_codec.encode(frame));
   }
