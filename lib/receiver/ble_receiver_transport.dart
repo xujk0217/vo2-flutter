@@ -78,6 +78,7 @@ class BleBridgeClientAdapter implements BleBridgeClient {
         await _methods
             .invokeListMethod<dynamic>('scanDevices', <String, dynamic>{
               'serviceUuid': DeviceBleUuids.service,
+              'advertisedNames': DeviceBleUuids.advertisedNames,
               'advertisedName': DeviceBleUuids.advertisedName,
             }) ??
         <dynamic>[];

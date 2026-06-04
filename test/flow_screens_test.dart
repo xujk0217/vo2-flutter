@@ -135,6 +135,8 @@ void main() {
       expect(find.text('Classic'), findsOneWidget);
       expect(find.text('BLE'), findsOneWidget);
       expect(find.text('Test Sensor (AA:BB)'), findsOneWidget);
+      expect(find.text('BLE 驗證資訊'), findsNothing);
+      expect(find.textContaining('協定：'), findsNothing);
     });
 
     testWidgets('BLE selection rebuilds writable protocol session', (
@@ -249,9 +251,11 @@ void main() {
     );
     final ReceiverConnectionController controller =
         ReceiverConnectionController(transport: transport);
+    final DeviceProtocolSession session = DeviceProtocolSession();
     addTearDown(() async {
       await controller.disposeAsync();
       await transport.eventController.close();
+      session.dispose();
     });
 
     await tester.pumpWidget(
@@ -259,6 +263,7 @@ void main() {
         home: ConnectionScreen(
           connectionController: controller,
           transportKind: ReceiverTransportKind.ble,
+          protocolSession: session,
         ),
       ),
     );
@@ -276,6 +281,32 @@ void main() {
     );
     await tester.pump();
 
+    final Uint8List healthPayload = Uint8List.fromList(<int>[0x01]);
+    await session.handleDataEvent(
+      _bleDataEvent(DeviceMessageType.healthResponse, 1, healthPayload),
+    );
+    final Uint8List appStatusPayload = Uint8List(9);
+    ByteData.sublistView(appStatusPayload)
+      ..setUint8(0, 1)
+      ..setUint8(1, 2)
+      ..setUint8(2, 3)
+      ..setUint8(3, 1)
+      ..setUint8(4, 4)
+      ..setUint8(5, 55)
+      ..setUint16(6, 0, Endian.little)
+      ..setUint8(8, 1);
+    await session.handleDataEvent(
+      _bleDataEvent(DeviceMessageType.appStatus, 2, appStatusPayload),
+    );
+    final Uint8List predictionPayload = Uint8List(12);
+    ByteData.sublistView(predictionPayload)
+      ..setUint64(0, 123456789, Endian.little)
+      ..setFloat32(8, 42.5, Endian.little);
+    await session.handleDataEvent(
+      _bleDataEvent(DeviceMessageType.vo2Prediction, 3, predictionPayload),
+    );
+    await tester.pump();
+
     expect(find.text('BLE 驗證資訊'), findsOneWidget);
     expect(find.text('模式：BLE'), findsOneWidget);
     expect(find.text('權限：已允許'), findsOneWidget);
@@ -284,6 +315,9 @@ void main() {
     expect(find.text('選擇：ble-1'), findsOneWidget);
     expect(find.text('狀態：write_complete'), findsOneWidget);
     expect(find.text('錯誤：gatt_error'), findsOneWidget);
+    expect(find.text('協定：0x0030'), findsOneWidget);
+    expect(find.text('健康：VO2 on / Sensor off'), findsOneWidget);
+    expect(find.text('App：cal 55% / ready'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
@@ -552,6 +586,79 @@ void main() {
 
       expect(find.text('VO2 42.5'), findsOneWidget);
       expect(find.text('已接收樣本：0'), findsOneWidget);
+    });
+
+    testWidgets('passive protocol messages do not alter dashboard metrics', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+      final DeviceProtocolSession session = DeviceProtocolSession();
+
+      await tester.pumpWidget(
+        wrap(
+          DashboardPage(
+            connectionController: controller,
+            protocolSession: session,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final Uint8List workoutSummaryPayload = Uint8List(77);
+      ByteData.sublistView(workoutSummaryPayload)
+        ..setUint64(0, 1000, Endian.little)
+        ..setUint64(8, 2000, Endian.little)
+        ..setUint64(16, 1000, Endian.little)
+        ..setFloat32(57, 30.0, Endian.little)
+        ..setFloat32(61, 31.0, Endian.little)
+        ..setFloat32(65, 30.5, Endian.little);
+      await session.handleDataEvent(
+        _bleDataEvent(
+          DeviceMessageType.workoutSummary,
+          1,
+          workoutSummaryPayload,
+        ),
+      );
+
+      final Uint8List recommendationPayload = Uint8List(13);
+      ByteData.sublistView(recommendationPayload)
+        ..setUint8(0, 1)
+        ..setUint8(1, 1)
+        ..setUint8(2, 0)
+        ..setUint32(5, 12000, Endian.little)
+        ..setUint32(9, 0, Endian.little);
+      await session.handleDataEvent(
+        _bleDataEvent(
+          DeviceMessageType.recommendationInput,
+          2,
+          recommendationPayload,
+        ),
+      );
+
+      final List<int> alertMessage = utf8.encode('slow down');
+      final Uint8List rpeAlertPayload = Uint8List(16 + alertMessage.length);
+      ByteData.sublistView(rpeAlertPayload)
+        ..setUint64(0, 123456789, Endian.little)
+        ..setUint8(8, 2)
+        ..setUint8(9, 9)
+        ..setUint32(10, 45000, Endian.little)
+        ..setUint16(14, alertMessage.length, Endian.little);
+      rpeAlertPayload.setRange(16, rpeAlertPayload.length, alertMessage);
+      await session.handleDataEvent(
+        _bleDataEvent(DeviceMessageType.rpe, 3, rpeAlertPayload),
+      );
+      await tester.pump();
+
+      expect(find.text('已接收樣本：0'), findsOneWidget);
+      expect(find.text('VO2 42.5'), findsNothing);
+      expect(find.text('slow down'), findsNothing);
     });
   });
 }

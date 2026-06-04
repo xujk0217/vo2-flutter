@@ -79,6 +79,17 @@ class _FakeBleBridgeClient implements BleBridgeClient {
 }
 
 void main() {
+  group('DeviceBleUuids', () {
+    test('matches accepted advertised names exactly', () {
+      expect(DeviceBleUuids.isAcceptedAdvertisedName('btfy'), isTrue);
+      expect(
+        DeviceBleUuids.isAcceptedAdvertisedName('bt_fucktrae_young'),
+        isTrue,
+      );
+      expect(DeviceBleUuids.isAcceptedAdvertisedName('VO2_DEVICE'), isFalse);
+    });
+  });
+
   group('mapClassicBridgeEvent', () {
     test('maps status events', () {
       final ReceiverTransportEvent event = mapClassicBridgeEvent(
@@ -181,6 +192,23 @@ void main() {
       },
     );
 
+    test('returns btfy BLE scan result unchanged', () async {
+      final _FakeBleBridgeClient client = _FakeBleBridgeClient()
+        ..devices = const <BleDeviceInfo>[
+          BleDeviceInfo(name: 'btfy', id: 'ble-2'),
+        ];
+      final BleReceiverTransport transport = BleReceiverTransport(
+        bridgeClient: client,
+      );
+
+      final List<ReceiverDeviceInfo> devices = await transport.getDevices();
+
+      expect(devices, hasLength(1));
+      expect(devices.single.name, 'btfy');
+      expect(devices.single.id, 'ble-2');
+      expect(devices.single.transportKind, ReceiverTransportKind.ble);
+    });
+
     test(
       'delegates connect, disconnect, and writeFrame to BLE client',
       () async {
@@ -273,11 +301,12 @@ void main() {
       expect(error.message, 'GATT failed.');
     });
 
-    test('reassembles split BLE TLV chunks into data event JSON', () async {
+    test('reassembles split BLE TLV chunks only after complete', () async {
       final _FakeBleBridgeClient client = _FakeBleBridgeClient();
       final BleReceiverTransport transport = BleReceiverTransport(
         bridgeClient: client,
       );
+
       // calibration_progress payload: elapsedMs=5000 (uint32 LE), hrEstimate=75 (uint8)
       const List<int> framePayload = <int>[0x88, 0x13, 0x00, 0x00, 0x4B];
       final Uint8List frame = const DeviceProtocolCodec().encode(
@@ -302,6 +331,7 @@ void main() {
       });
 
       final ReceiverDataEvent event = await eventFuture as ReceiverDataEvent;
+
       final Map<String, dynamic> payload =
           jsonDecode(event.payload) as Map<String, dynamic>;
 
@@ -316,6 +346,7 @@ void main() {
       expect(parsed!.messageType, DeviceMessageType.calibrationProgress);
       expect(parsed.seq, 9);
       expect(parsed.typedPayload, isA<CalibrationProgressPayload>());
+
       final CalibrationProgressPayload typed =
           parsed.typedPayload as CalibrationProgressPayload;
       expect(typed.elapsedMs, 5000);
@@ -357,7 +388,7 @@ void main() {
       );
     });
 
-    test('emits error event for invalid BLE TLV chunk', () async {
+    test('maps invalid BLE TLV chunk to invalid_ble_frame error', () async {
       final _FakeBleBridgeClient client = _FakeBleBridgeClient();
       final BleReceiverTransport transport = BleReceiverTransport(
         bridgeClient: client,
@@ -374,6 +405,59 @@ void main() {
 
       final ReceiverErrorEvent error = await eventFuture as ReceiverErrorEvent;
       expect(error.code, 'invalid_ble_frame');
+      expect(error.message, isNotEmpty);
+      expect(client.disconnected, isFalse);
+    });
+
+    test('maps CRC failure to invalid_ble_frame error', () async {
+      final _FakeBleBridgeClient client = _FakeBleBridgeClient();
+      final BleReceiverTransport transport = BleReceiverTransport(
+        bridgeClient: client,
+      );
+      final DeviceProtocolCodec codec = const DeviceProtocolCodec();
+      final Uint8List frame = codec.encode(
+        const DeviceFrame(messageType: DeviceMessageType.profile, seq: 9),
+      );
+      frame[frame.length - 1] ^= 0xFF;
+
+      final Future<ReceiverTransportEvent> eventFuture = transport
+          .events()
+          .first;
+      await pumpEventQueue();
+
+      client.eventController.add(<String, dynamic>{
+        'type': 'data',
+        'chunk': frame,
+      });
+
+      final ReceiverErrorEvent error = await eventFuture as ReceiverErrorEvent;
+      expect(error.code, 'invalid_ble_frame');
+      expect(error.message, isNotEmpty);
+      expect(client.disconnected, isFalse);
+    });
+
+    test('maps version mismatch to invalid_ble_frame without disconnect', () async {
+      final _FakeBleBridgeClient client = _FakeBleBridgeClient();
+      final BleReceiverTransport transport = BleReceiverTransport(
+        bridgeClient: client,
+      );
+      final DeviceProtocolCodec codec = const DeviceProtocolCodec();
+      final Uint8List invalidVersionFrame = codec.encode(
+        const DeviceFrame(messageType: DeviceMessageType.profile, seq: 3),
+      )
+        ..[2] = 0x00;
+
+      final Future<ReceiverTransportEvent> emittedFuture = transport.events().first;
+      await pumpEventQueue();
+      client.eventController.add(<String, dynamic>{
+        'type': 'data',
+        'chunk': invalidVersionFrame,
+      });
+
+      final ReceiverErrorEvent errorEvent =
+          await emittedFuture as ReceiverErrorEvent;
+      expect(errorEvent.code, 'invalid_ble_frame');
+      expect(client.disconnected, isFalse);
     });
   });
 }

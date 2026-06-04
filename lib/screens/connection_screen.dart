@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:vo2_flutter/receiver/classic_bluetooth_transport.dart';
+import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
 import 'package:vo2_flutter/receiver/receiver_transport.dart';
 import 'package:vo2_flutter/screens/calibration_screen.dart';
@@ -16,15 +17,18 @@ class ConnectionScreen extends StatefulWidget {
     super.key,
     ReceiverConnectionController? connectionController,
     ReceiverTransportKind transportKind = ReceiverTransportKind.classicBluetooth,
+    DeviceProtocolSession? protocolSession,
     TransportKindChanged? onTransportKindChanged,
   }) : _connectionController = connectionController,
-       _transportKind = transportKind,
+        _transportKind = transportKind,
+       _protocolSession = protocolSession,
        _onTransportKindChanged = onTransportKindChanged;
 
   static const String routeName = '/connection';
 
   final ReceiverConnectionController? _connectionController;
   final ReceiverTransportKind _transportKind;
+  final DeviceProtocolSession? _protocolSession;
   final TransportKindChanged? _onTransportKindChanged;
 
   @override
@@ -48,6 +52,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           preferredDeviceId: kReferenceDeviceAddress,
         );
     _connectionController.addListener(_handleConnectionChanged);
+    widget._protocolSession?.addListener(_handleProtocolChanged);
     _transportKind = widget._transportKind;
     unawaited(_connectionController.bootstrap());
   }
@@ -62,10 +67,22 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       _connectionController.addListener(_handleConnectionChanged);
       unawaited(_connectionController.bootstrap());
     }
+    if (oldWidget._protocolSession != widget._protocolSession) {
+      oldWidget._protocolSession?.removeListener(_handleProtocolChanged);
+      widget._protocolSession?.addListener(_handleProtocolChanged);
+    }
     _transportKind = widget._transportKind;
   }
 
   void _handleConnectionChanged() {
+    _notifyIfMounted();
+  }
+
+  void _handleProtocolChanged() {
+    _notifyIfMounted();
+  }
+
+  void _notifyIfMounted() {
     if (!mounted) {
       return;
     }
@@ -109,14 +126,36 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   @override
   void dispose() {
     _connectionController.removeListener(_handleConnectionChanged);
+    widget._protocolSession?.removeListener(_handleProtocolChanged);
     if (_ownsConnectionController) {
       _connectionController.dispose();
     }
     super.dispose();
   }
 
+  String? _healthStatusLabel() {
+    final health = widget._protocolSession?.latestHealthResponse;
+    if (health == null) return null;
+    final String vo2 = health.vo2Running ? 'VO2 on' : 'VO2 off';
+    final String sensor = health.sensorRunning ? 'Sensor on' : 'Sensor off';
+    return '$vo2 / $sensor';
+  }
+
+  String? _appStatusLabel() {
+    final status = widget._protocolSession?.latestAppStatus;
+    if (status == null) return null;
+    final String readiness = status.startWorkoutAvailable ? 'ready' : 'wait';
+    return 'cal ${status.calibrationProgressPct}% / $readiness';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bool showingBleDiagnostics =
+        _transportKind == ReceiverTransportKind.ble;
+    final DeviceProtocolSession? protocolSession = showingBleDiagnostics
+        ? widget._protocolSession
+        : null;
+
     return Scaffold(
       appBar: AppBar(title: const Text('裝置連線')),
       body: SafeArea(
@@ -171,9 +210,16 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               onRefreshDevices: _connectionController.refreshDevices,
               onConnectPressed: _connectionController.toggleConnection,
               onDeviceChanged: _connectionController.selectDevice,
-              showBleDiagnostics: _transportKind == ReceiverTransportKind.ble,
+              showBleDiagnostics: showingBleDiagnostics,
               lastTransportState: _connectionController.lastTransportState,
               lastErrorCode: _connectionController.lastErrorCode,
+              lastProtocolMessageType: protocolSession?.lastProtocolMessageType,
+              lastUnsupportedMessageType:
+                  protocolSession?.lastUnsupportedMessageType,
+              healthStatusLabel: showingBleDiagnostics
+                  ? _healthStatusLabel()
+                  : null,
+              appStatusLabel: showingBleDiagnostics ? _appStatusLabel() : null,
             ),
             const SizedBox(height: 20),
             FilledButton.icon(

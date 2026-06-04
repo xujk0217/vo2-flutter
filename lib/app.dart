@@ -163,6 +163,7 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
         ConnectionScreen.routeName: (_) => ConnectionScreen(
           connectionController: _connectionController,
           transportKind: _transportKind,
+          protocolSession: _protocolSession,
           onTransportKindChanged: _selectTransportKind,
         ),
         CalibrationScreen.routeName: (_) => CalibrationScreen(

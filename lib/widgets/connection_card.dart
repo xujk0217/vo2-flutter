@@ -21,6 +21,10 @@ class ConnectionCard extends StatelessWidget {
     this.showBleDiagnostics = false,
     this.lastTransportState,
     this.lastErrorCode,
+    this.lastProtocolMessageType,
+    this.lastUnsupportedMessageType,
+    this.healthStatusLabel,
+    this.appStatusLabel,
   });
 
   final List<ReceiverDeviceInfo> devices;
@@ -38,6 +42,10 @@ class ConnectionCard extends StatelessWidget {
   final bool showBleDiagnostics;
   final String? lastTransportState;
   final String? lastErrorCode;
+  final int? lastProtocolMessageType;
+  final int? lastUnsupportedMessageType;
+  final String? healthStatusLabel;
+  final String? appStatusLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -122,6 +130,10 @@ class ConnectionCard extends StatelessWidget {
               selectedDeviceId: selectedDeviceId,
               lastTransportState: lastTransportState,
               lastErrorCode: lastErrorCode,
+              lastProtocolMessageType: lastProtocolMessageType,
+              lastUnsupportedMessageType: lastUnsupportedMessageType,
+              healthStatusLabel: healthStatusLabel,
+              appStatusLabel: appStatusLabel,
             ),
           ],
           const SizedBox(height: 14),
@@ -202,6 +214,10 @@ class _BleDiagnosticsPanel extends StatelessWidget {
     required this.selectedDeviceId,
     required this.lastTransportState,
     required this.lastErrorCode,
+    required this.lastProtocolMessageType,
+    required this.lastUnsupportedMessageType,
+    required this.healthStatusLabel,
+    required this.appStatusLabel,
   });
 
   final bool permissionsGranted;
@@ -210,6 +226,14 @@ class _BleDiagnosticsPanel extends StatelessWidget {
   final String? selectedDeviceId;
   final String? lastTransportState;
   final String? lastErrorCode;
+  final int? lastProtocolMessageType;
+  final int? lastUnsupportedMessageType;
+  final String? healthStatusLabel;
+  final String? appStatusLabel;
+
+  static String _hexMessageType(int value) {
+    return '0x${value.toRadixString(16).padLeft(4, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -243,6 +267,19 @@ class _BleDiagnosticsPanel extends StatelessWidget {
                 _DiagnosticChip(label: '選擇：${selectedDeviceId ?? '無'}'),
                 _DiagnosticChip(label: '狀態：${lastTransportState ?? '尚無'}'),
                 _DiagnosticChip(label: '錯誤：${lastErrorCode ?? '無'}'),
+                if (lastProtocolMessageType != null)
+                  _DiagnosticChip(
+                    label: '協定：${_hexMessageType(lastProtocolMessageType!)}',
+                  ),
+                if (lastUnsupportedMessageType != null)
+                  _DiagnosticChip(
+                    label:
+                        '未支援：${_hexMessageType(lastUnsupportedMessageType!)}',
+                  ),
+                if (healthStatusLabel != null)
+                  _DiagnosticChip(label: '健康：$healthStatusLabel'),
+                if (appStatusLabel != null)
+                  _DiagnosticChip(label: 'App：$appStatusLabel'),
               ],
             ),
           ],

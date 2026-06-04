@@ -10,6 +10,14 @@ class DeviceBleUuids {
   static const String notifyCharacteristic =
       '0000ffe2-0000-1000-8000-00805f9b34fb';
   static const String advertisedName = 'bt_fucktrae_young';
+  static const List<String> advertisedNames = <String>[
+    'bt_fucktrae_young',
+    'btfy',
+  ];
+
+  static bool isAcceptedAdvertisedName(String? name) {
+    return advertisedNames.contains(name);
+  }
 }
 
 class DeviceMessageType {
@@ -31,6 +39,9 @@ class DeviceMessageType {
   static const int rpe = 0x0100;
   static const int classifierResult = 0x0101;
   static const int fitnessCommand = 0x0102;
+  static const int appStatus = 0x0103;
+  static const int workoutSummary = 0x0104;
+  static const int recommendationInput = 0x0105;
 }
 
 class DeviceProtocolConstants {
@@ -381,6 +392,214 @@ class HealthResponsePayload {
   }
 }
 
+class ProfileAckPayload {
+  const ProfileAckPayload();
+
+  static ProfileAckPayload? decode(List<int> payload) {
+    if (payload.isNotEmpty) {
+      return null;
+    }
+    return const ProfileAckPayload();
+  }
+}
+
+class AppStatusPayload {
+  const AppStatusPayload({
+    required this.transport,
+    required this.connectionState,
+    required this.bleTransferState,
+    required this.profileReceived,
+    required this.calibrationState,
+    required this.calibrationProgressPct,
+    required this.lastErrorCode,
+    required this.startWorkoutAvailable,
+  });
+
+  final int transport;
+  final int connectionState;
+  final int bleTransferState;
+  final bool profileReceived;
+  final int calibrationState;
+  final int calibrationProgressPct;
+  final int lastErrorCode;
+  final bool startWorkoutAvailable;
+
+  static AppStatusPayload decode(List<int> payload) {
+    if (payload.length != 9) {
+      throw const FormatException('Invalid app_status payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    return AppStatusPayload(
+      transport: data.getUint8(0),
+      connectionState: data.getUint8(1),
+      bleTransferState: data.getUint8(2),
+      profileReceived: data.getUint8(3) != 0,
+      calibrationState: data.getUint8(4),
+      calibrationProgressPct: data.getUint8(5),
+      lastErrorCode: data.getUint16(6, Endian.little),
+      startWorkoutAvailable: data.getUint8(8) != 0,
+    );
+  }
+}
+
+class WorkoutSummaryPayload {
+  const WorkoutSummaryPayload({
+    required this.workoutStartTsMs,
+    required this.workoutEndTsMs,
+    required this.durationMs,
+    required this.totalMovementCount,
+    required this.repsByMovement,
+    required this.setsByMovement,
+    required this.vo2Min,
+    required this.vo2Max,
+    required this.vo2Avg,
+    required this.vo2SampleCount,
+    required this.rpeMin,
+    required this.rpeMax,
+    required this.rpeAvg,
+    required this.rpeSampleCount,
+    required this.loadStatus,
+  });
+
+  final int workoutStartTsMs;
+  final int workoutEndTsMs;
+  final int durationMs;
+  final int totalMovementCount;
+  final List<int> repsByMovement;
+  final List<int> setsByMovement;
+  final double vo2Min;
+  final double vo2Max;
+  final double vo2Avg;
+  final int vo2SampleCount;
+  final int rpeMin;
+  final int rpeMax;
+  final int rpeAvg;
+  final int rpeSampleCount;
+  final int loadStatus;
+
+  static WorkoutSummaryPayload decode(List<int> payload) {
+    if (payload.length != 77) {
+      throw const FormatException('Invalid workout_summary payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    return WorkoutSummaryPayload(
+      workoutStartTsMs: data.getUint64(0, Endian.little),
+      workoutEndTsMs: data.getUint64(8, Endian.little),
+      durationMs: data.getUint64(16, Endian.little),
+      totalMovementCount: data.getUint8(24),
+      repsByMovement: List<int>.generate(
+        8,
+        (int index) => data.getUint16(25 + index * 2, Endian.little),
+      ),
+      setsByMovement: List<int>.generate(
+        8,
+        (int index) => data.getUint16(41 + index * 2, Endian.little),
+      ),
+      vo2Min: data.getFloat32(57, Endian.little),
+      vo2Max: data.getFloat32(61, Endian.little),
+      vo2Avg: data.getFloat32(65, Endian.little),
+      vo2SampleCount: data.getUint16(69, Endian.little),
+      rpeMin: data.getUint8(71),
+      rpeMax: data.getUint8(72),
+      rpeAvg: data.getUint8(73),
+      rpeSampleCount: data.getUint16(74, Endian.little),
+      loadStatus: data.getUint8(76),
+    );
+  }
+}
+
+class RecommendationInputPayload {
+  const RecommendationInputPayload({
+    required this.recommendationStatus,
+    required this.hasLowRpeInterval,
+    required this.hasHighRpeInterval,
+    required this.loadStatus,
+    required this.vo2Trend,
+    required this.lowRpeTotalMs,
+    required this.highRpeTotalMs,
+  });
+
+  final int recommendationStatus;
+  final bool hasLowRpeInterval;
+  final bool hasHighRpeInterval;
+  final int loadStatus;
+  final int vo2Trend;
+  final int lowRpeTotalMs;
+  final int highRpeTotalMs;
+
+  static RecommendationInputPayload decode(List<int> payload) {
+    if (payload.length != 13) {
+      throw const FormatException('Invalid recommendation_input payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    return RecommendationInputPayload(
+      recommendationStatus: data.getUint8(0),
+      hasLowRpeInterval: data.getUint8(1) != 0,
+      hasHighRpeInterval: data.getUint8(2) != 0,
+      loadStatus: data.getUint8(3),
+      vo2Trend: data.getUint8(4),
+      lowRpeTotalMs: data.getUint32(5, Endian.little),
+      highRpeTotalMs: data.getUint32(9, Endian.little),
+    );
+  }
+}
+
+class RpePayload {
+  const RpePayload({required this.hostTsMs, required this.rpe});
+
+  final int hostTsMs;
+  final int rpe;
+
+  static RpePayload decode(List<int> payload) {
+    if (payload.length != 9) {
+      throw const FormatException('Invalid rpe payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    return RpePayload(
+      hostTsMs: data.getUint64(0, Endian.little),
+      rpe: data.getUint8(8),
+    );
+  }
+}
+
+class RpeAlertPayload {
+  const RpeAlertPayload({
+    required this.hostTsMs,
+    required this.alertType,
+    required this.rpe,
+    required this.durationMs,
+    required this.message,
+  });
+
+  final int hostTsMs;
+  final int alertType;
+  final int rpe;
+  final int durationMs;
+  final String message;
+
+  static RpeAlertPayload? decode(List<int> payload) {
+    if (payload.length < 16) {
+      return null;
+    }
+    try {
+      final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+      final int messageLength = data.getUint16(14, Endian.little);
+      if (payload.length != 16 + messageLength) {
+        return null;
+      }
+      return RpeAlertPayload(
+        hostTsMs: data.getUint64(0, Endian.little),
+        alertType: data.getUint8(8),
+        rpe: data.getUint8(9),
+        durationMs: data.getUint32(10, Endian.little),
+        message: utf8.decode(payload.sublist(16)),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 class ErrorPayload {
   const ErrorPayload({required this.code, required this.message});
 
@@ -453,6 +672,11 @@ class DeviceProtocolJsonParser {
 
     Object? typedPayload;
     switch (messageType) {
+      case DeviceMessageType.profileAck:
+        typedPayload = ProfileAckPayload.decode(decodedPayload);
+        if (typedPayload == null) {
+          return null;
+        }
       case DeviceMessageType.calibrationProgress:
         try {
           typedPayload = CalibrationProgressPayload.decode(decodedPayload);
@@ -474,6 +698,37 @@ class DeviceProtocolJsonParser {
       case DeviceMessageType.healthResponse:
         try {
           typedPayload = HealthResponsePayload.decode(decodedPayload);
+        } catch (_) {
+          return null;
+        }
+      case DeviceMessageType.rpe:
+        try {
+          if (decodedPayload.length == 9) {
+            typedPayload = RpePayload.decode(decodedPayload);
+          } else {
+            typedPayload = RpeAlertPayload.decode(decodedPayload);
+            if (typedPayload == null) {
+              return null;
+            }
+          }
+        } catch (_) {
+          return null;
+        }
+      case DeviceMessageType.appStatus:
+        try {
+          typedPayload = AppStatusPayload.decode(decodedPayload);
+        } catch (_) {
+          return null;
+        }
+      case DeviceMessageType.workoutSummary:
+        try {
+          typedPayload = WorkoutSummaryPayload.decode(decodedPayload);
+        } catch (_) {
+          return null;
+        }
+      case DeviceMessageType.recommendationInput:
+        try {
+          typedPayload = RecommendationInputPayload.decode(decodedPayload);
         } catch (_) {
           return null;
         }

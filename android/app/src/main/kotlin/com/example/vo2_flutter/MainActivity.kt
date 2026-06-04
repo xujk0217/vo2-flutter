@@ -291,19 +291,19 @@ class MainActivity : FlutterActivity() {
         }
 
         val serviceUuid = parseUuidArgument(call, "serviceUuid", BLE_SERVICE_UUID)
-        val advertisedName = call.argument<String>("advertisedName") ?: BLE_ADVERTISED_NAME
+        val advertisedNames = parseAdvertisedNamesArgument(call)
         pendingBleScanResult = result
         bleScanDevices.clear()
         emitBleStatus("scanning", "Scanning for BLE receiver...")
 
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, scanResult: ScanResult) {
-                recordBleScanResult(scanResult, serviceUuid, advertisedName)
+                recordBleScanResult(scanResult, serviceUuid, advertisedNames)
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 results.forEach { scanResult ->
-                    recordBleScanResult(scanResult, serviceUuid, advertisedName)
+                    recordBleScanResult(scanResult, serviceUuid, advertisedNames)
                 }
             }
 
@@ -313,10 +313,12 @@ class MainActivity : FlutterActivity() {
         }
 
         bleScanCallback = callback
-        val filters = listOf(
+        val filters = mutableListOf(
             ScanFilter.Builder().setServiceUuid(ParcelUuid(serviceUuid)).build(),
-            ScanFilter.Builder().setDeviceName(advertisedName).build(),
         )
+        advertisedNames.forEach { advertisedName ->
+            filters.add(ScanFilter.Builder().setDeviceName(advertisedName).build())
+        }
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -710,21 +712,27 @@ class MainActivity : FlutterActivity() {
     private fun recordBleScanResult(
         result: ScanResult,
         serviceUuid: UUID,
-        advertisedName: String,
+        advertisedNames: List<String>,
     ) {
         val device = result.device ?: return
         val scanRecord = result.scanRecord
-        val name = scanRecord?.deviceName ?: device.name ?: ""
+        val scanRecordName = scanRecord?.deviceName
+        val deviceName = device.name
+        val displayName = scanRecordName?.takeIf { it.isNotBlank() }
+            ?: deviceName?.takeIf { it.isNotBlank() }
+            ?: advertisedNames.first()
         val serviceMatches = scanRecord?.serviceUuids?.any { parcelUuid ->
             parcelUuid.uuid == serviceUuid
         } == true
-        val nameMatches = name == advertisedName || device.name == advertisedName
+        val nameMatches = advertisedNames.any { advertisedName ->
+            scanRecordName == advertisedName || deviceName == advertisedName
+        }
         if (!serviceMatches && !nameMatches) {
             return
         }
 
         bleScanDevices[device.address] = mapOf(
-            "name" to (if (name.isNotBlank()) name else advertisedName),
+            "name" to displayName,
             "id" to device.address,
         )
     }
@@ -780,6 +788,21 @@ class MainActivity : FlutterActivity() {
         } catch (_: IllegalArgumentException) {
             fallback
         }
+    }
+
+    private fun parseAdvertisedNamesArgument(call: MethodCall): List<String> {
+        val advertisedNames = call.argument<List<String>>("advertisedNames")
+            ?.filter { advertisedName -> advertisedName.isNotBlank() }
+        if (!advertisedNames.isNullOrEmpty()) {
+            return advertisedNames
+        }
+
+        val advertisedName = call.argument<String>("advertisedName")
+        if (!advertisedName.isNullOrBlank()) {
+            return listOf(advertisedName)
+        }
+
+        return listOf(BLE_ADVERTISED_NAME)
     }
 
     private fun ensureBleAccess(result: MethodChannel.Result): Boolean {

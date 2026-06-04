@@ -37,6 +37,80 @@ const UserProfile _defaultProfile = UserProfile(
   sex: UserSex.male,
 );
 
+Uint8List _appStatusPayload() {
+  final Uint8List payload = Uint8List(9);
+  ByteData.sublistView(payload)
+    ..setUint8(0, 1)
+    ..setUint8(1, 2)
+    ..setUint8(2, 3)
+    ..setUint8(3, 1)
+    ..setUint8(4, 4)
+    ..setUint8(5, 55)
+    ..setUint16(6, 99, Endian.little)
+    ..setUint8(8, 1);
+  return payload;
+}
+
+Uint8List _workoutSummaryPayload() {
+  final Uint8List payload = Uint8List(77);
+  final ByteData data = ByteData.sublistView(payload);
+  data
+    ..setUint64(0, 1000, Endian.little)
+    ..setUint64(8, 4000, Endian.little)
+    ..setUint64(16, 3000, Endian.little)
+    ..setUint8(24, 2);
+  for (int i = 0; i < 8; i += 1) {
+    data
+      ..setUint16(25 + i * 2, 10 + i, Endian.little)
+      ..setUint16(41 + i * 2, 1 + i, Endian.little);
+  }
+  data
+    ..setFloat32(57, 30.5, Endian.little)
+    ..setFloat32(61, 44.5, Endian.little)
+    ..setFloat32(65, 38.5, Endian.little)
+    ..setUint16(69, 7, Endian.little)
+    ..setUint8(71, 3)
+    ..setUint8(72, 8)
+    ..setUint8(73, 5)
+    ..setUint16(74, 6, Endian.little)
+    ..setUint8(76, 2);
+  return payload;
+}
+
+Uint8List _recommendationInputPayload() {
+  final Uint8List payload = Uint8List(13);
+  ByteData.sublistView(payload)
+    ..setUint8(0, 1)
+    ..setUint8(1, 1)
+    ..setUint8(2, 0)
+    ..setUint8(3, 2)
+    ..setUint8(4, 3)
+    ..setUint32(5, 12000, Endian.little)
+    ..setUint32(9, 34000, Endian.little);
+  return payload;
+}
+
+Uint8List _rpeSamplePayload() {
+  final Uint8List payload = Uint8List(9);
+  ByteData.sublistView(payload)
+    ..setUint64(0, 987654321, Endian.little)
+    ..setUint8(8, 6);
+  return payload;
+}
+
+Uint8List _rpeAlertPayload(String message) {
+  final List<int> messageBytes = utf8.encode(message);
+  final Uint8List payload = Uint8List(16 + messageBytes.length);
+  ByteData.sublistView(payload)
+    ..setUint64(0, 123456789, Endian.little)
+    ..setUint8(8, 2)
+    ..setUint8(9, 9)
+    ..setUint32(10, 45000, Endian.little)
+    ..setUint16(14, messageBytes.length, Endian.little);
+  payload.setRange(16, payload.length, messageBytes);
+  return payload;
+}
+
 void main() {
   group('DeviceProtocolSession', () {
     // ── canWriteCommands / writerless ──────────────────────────────────────
@@ -142,6 +216,47 @@ void main() {
       );
     });
 
+    test(
+      'sendHealthRequest and sendProtocolDisconnect write empty frames with next sequence',
+      () async {
+        final writer = _FakeDeviceProtocolFrameWriter();
+        final DeviceProtocolSession session = DeviceProtocolSession(
+          writer: writer,
+          initialProfile: _defaultProfile,
+        );
+
+        expect(await session.sendHealthRequest(), isTrue);
+        expect(await session.sendProtocolDisconnect(), isTrue);
+
+        expect(writer.writtenFrames, hasLength(2));
+        expect(
+          writer.writtenFrames[0].messageType,
+          DeviceMessageType.healthRequest,
+        );
+        expect(writer.writtenFrames[0].seq, 1);
+        expect(writer.writtenFrames[0].payload, isEmpty);
+        expect(
+          writer.writtenFrames[1].messageType,
+          DeviceMessageType.disconnect,
+        );
+        expect(writer.writtenFrames[1].seq, 2);
+        expect(writer.writtenFrames[1].payload, isEmpty);
+      },
+    );
+
+    test(
+      'writerless helper commands return false and write no frames',
+      () async {
+        final DeviceProtocolSession session = DeviceProtocolSession(
+          initialProfile: _defaultProfile,
+        );
+
+        expect(await session.sendHealthRequest(), isFalse);
+        expect(await session.sendProtocolDisconnect(), isFalse);
+        expect(session.canWriteCommands, isFalse);
+      },
+    );
+
     // ── profile request response ──────────────────────────────────────────
 
     test('empty profile request triggers profile response', () async {
@@ -174,7 +289,90 @@ void main() {
         sex: 1, // female
       ).encode();
       expect(frame.payload, orderedEquals(expectedPayload));
+      expect(session.lastProtocolMessageType, DeviceMessageType.profile);
     });
+
+    // ── passive protocol state ─────────────────────────────────────────────
+
+    test(
+      'stores passive payloads and protocol message types without writes',
+      () async {
+        final writer = _FakeDeviceProtocolFrameWriter();
+        final DeviceProtocolSession session = DeviceProtocolSession(
+          writer: writer,
+          initialProfile: _defaultProfile,
+        );
+
+        await session.handleDataEvent(
+          _bleDataEvent(DeviceMessageType.profileAck, 1, <int>[]),
+        );
+        expect(session.latestProfileAck, isA<ProfileAckPayload>());
+        expect(session.lastProtocolMessageType, DeviceMessageType.profileAck);
+
+        await session.handleDataEvent(
+          _bleDataEvent(DeviceMessageType.healthResponse, 2, <int>[0x03]),
+        );
+        expect(session.latestHealthResponse, isA<HealthResponsePayload>());
+        expect(session.latestHealthResponse!.vo2Running, isTrue);
+        expect(session.latestHealthResponse!.sensorRunning, isTrue);
+        expect(
+          session.lastProtocolMessageType,
+          DeviceMessageType.healthResponse,
+        );
+
+        await session.handleDataEvent(
+          _bleDataEvent(DeviceMessageType.appStatus, 3, _appStatusPayload()),
+        );
+        expect(session.latestAppStatus, isA<AppStatusPayload>());
+        expect(session.latestAppStatus!.calibrationProgressPct, 55);
+        expect(session.lastProtocolMessageType, DeviceMessageType.appStatus);
+
+        await session.handleDataEvent(
+          _bleDataEvent(
+            DeviceMessageType.workoutSummary,
+            4,
+            _workoutSummaryPayload(),
+          ),
+        );
+        expect(session.latestWorkoutSummary, isA<WorkoutSummaryPayload>());
+        expect(session.latestWorkoutSummary!.durationMs, 3000);
+        expect(session.latestWorkoutSummary!.repsByMovement.first, 10);
+        expect(
+          session.lastProtocolMessageType,
+          DeviceMessageType.workoutSummary,
+        );
+
+        await session.handleDataEvent(
+          _bleDataEvent(
+            DeviceMessageType.recommendationInput,
+            5,
+            _recommendationInputPayload(),
+          ),
+        );
+        expect(
+          session.latestRecommendationInput,
+          isA<RecommendationInputPayload>(),
+        );
+        expect(session.latestRecommendationInput!.lowRpeTotalMs, 12000);
+        expect(
+          session.lastProtocolMessageType,
+          DeviceMessageType.recommendationInput,
+        );
+
+        await session.handleDataEvent(
+          _bleDataEvent(
+            DeviceMessageType.rpe,
+            6,
+            _rpeAlertPayload('slow down'),
+          ),
+        );
+        expect(session.latestRpeAlert, isA<RpeAlertPayload>());
+        expect(session.latestRpeAlert!.message, 'slow down');
+        expect(session.lastProtocolMessageType, DeviceMessageType.rpe);
+        expect(session.lastUnsupportedMessageType, isNull);
+        expect(writer.writtenFrames, isEmpty);
+      },
+    );
 
     // ── startCalibration ──────────────────────────────────────────────────
 
@@ -341,10 +539,10 @@ void main() {
       },
     );
 
-    // ── non-calibration events are ignored ────────────────────────────────
+    // ── non-calibration events are ignored/passive ────────────────────────
 
     test(
-      'sensor_ppg_imu, rpe, classifierResult, fitnessCommand are no-ops',
+      'sensor_ppg_imu during running calibration does not change state or writes',
       () async {
         final writer = _FakeDeviceProtocolFrameWriter();
         final DeviceProtocolSession session = DeviceProtocolSession(
@@ -355,7 +553,27 @@ void main() {
         await session.startCalibration();
         writer.writtenFrames.clear();
 
-        // sensor_ppg_imu
+        final Uint8List progressPayload = Uint8List(5);
+        ByteData.sublistView(progressPayload)
+          ..setUint32(0, 15000, Endian.little)
+          ..setUint8(4, 78);
+        await session.handleDataEvent(
+          _bleDataEvent(
+            DeviceMessageType.calibrationProgress,
+            1,
+            progressPayload,
+          ),
+        );
+
+        final Uint8List predictionPayload = Uint8List(12);
+        ByteData.sublistView(predictionPayload)
+          ..setUint64(0, 123456789, Endian.little)
+          ..setFloat32(8, 42.5, Endian.little);
+        await session.handleDataEvent(
+          _bleDataEvent(DeviceMessageType.vo2Prediction, 2, predictionPayload),
+        );
+        writer.writtenFrames.clear();
+
         await session.handleDataEvent(
           _bleDataEvent(
             DeviceMessageType.sensorPpgImu,
@@ -367,19 +585,42 @@ void main() {
           session.calibrationState,
           DeviceProtocolCalibrationState.running,
         );
+        expect(session.calibrationElapsedMs, 15000);
+        expect(session.calibrationHrEstimate, 78);
+        expect(session.calibrationProgress, closeTo(0.5, 0.001));
+        expect(session.latestVo2Prediction!.vo2MlKgMin, closeTo(42.5, 0.001));
+        expect(
+          session.lastProtocolMessageType,
+          DeviceMessageType.vo2Prediction,
+        );
         expect(writer.writtenFrames, isEmpty);
+      },
+    );
 
-        // rpe
+    test(
+      'rpe sample, classifierResult, and fitnessCommand stay passive',
+      () async {
+        final writer = _FakeDeviceProtocolFrameWriter();
+        final DeviceProtocolSession session = DeviceProtocolSession(
+          writer: writer,
+          initialProfile: _defaultProfile,
+        );
+
+        await session.startCalibration();
+        writer.writtenFrames.clear();
+
         await session.handleDataEvent(
-          _bleDataEvent(DeviceMessageType.rpe, 0, <int>[]),
+          _bleDataEvent(DeviceMessageType.rpe, 0, _rpeSamplePayload()),
         );
         expect(
           session.calibrationState,
           DeviceProtocolCalibrationState.running,
         );
+        expect(session.latestRpeAlert, isNull);
+        expect(session.lastProtocolMessageType, DeviceMessageType.rpe);
+        expect(session.lastUnsupportedMessageType, isNull);
         expect(writer.writtenFrames, isEmpty);
 
-        // classifierResult
         await session.handleDataEvent(
           _bleDataEvent(DeviceMessageType.classifierResult, 0, <int>[]),
         );
@@ -387,9 +628,16 @@ void main() {
           session.calibrationState,
           DeviceProtocolCalibrationState.running,
         );
+        expect(
+          session.lastProtocolMessageType,
+          DeviceMessageType.classifierResult,
+        );
+        expect(
+          session.lastUnsupportedMessageType,
+          DeviceMessageType.classifierResult,
+        );
         expect(writer.writtenFrames, isEmpty);
 
-        // fitnessCommand
         await session.handleDataEvent(
           _bleDataEvent(DeviceMessageType.fitnessCommand, 0, <int>[]),
         );
@@ -397,6 +645,16 @@ void main() {
           session.calibrationState,
           DeviceProtocolCalibrationState.running,
         );
+        expect(
+          session.lastProtocolMessageType,
+          DeviceMessageType.fitnessCommand,
+        );
+        expect(
+          session.lastUnsupportedMessageType,
+          DeviceMessageType.fitnessCommand,
+        );
+        expect(session.calibrationProgress, isNull);
+        expect(session.latestVo2Prediction, isNull);
         expect(writer.writtenFrames, isEmpty);
       },
     );

@@ -30,6 +30,14 @@ class DeviceProtocolSession extends ChangeNotifier {
   CalibrationDonePayload? _calibrationDone;
   ErrorPayload? _protocolError;
   Vo2PredictionPayload? _latestVo2Prediction;
+  ProfileAckPayload? _latestProfileAck;
+  HealthResponsePayload? _latestHealthResponse;
+  AppStatusPayload? _latestAppStatus;
+  WorkoutSummaryPayload? _latestWorkoutSummary;
+  RecommendationInputPayload? _latestRecommendationInput;
+  RpeAlertPayload? _latestRpeAlert;
+  int? _lastProtocolMessageType;
+  int? _lastUnsupportedMessageType;
 
   // ── Public accessors ──────────────────────────────────────────────────────
 
@@ -48,6 +56,23 @@ class DeviceProtocolSession extends ChangeNotifier {
   ErrorPayload? get protocolError => _protocolError;
 
   Vo2PredictionPayload? get latestVo2Prediction => _latestVo2Prediction;
+
+  ProfileAckPayload? get latestProfileAck => _latestProfileAck;
+
+  HealthResponsePayload? get latestHealthResponse => _latestHealthResponse;
+
+  AppStatusPayload? get latestAppStatus => _latestAppStatus;
+
+  WorkoutSummaryPayload? get latestWorkoutSummary => _latestWorkoutSummary;
+
+  RecommendationInputPayload? get latestRecommendationInput =>
+      _latestRecommendationInput;
+
+  RpeAlertPayload? get latestRpeAlert => _latestRpeAlert;
+
+  int? get lastProtocolMessageType => _lastProtocolMessageType;
+
+  int? get lastUnsupportedMessageType => _lastUnsupportedMessageType;
 
   // ── Profile management ────────────────────────────────────────────────────
 
@@ -102,6 +127,27 @@ class DeviceProtocolSession extends ChangeNotifier {
     return true;
   }
 
+  Future<bool> _sendEmptyCommand(int messageType) async {
+    final DeviceProtocolFrameWriter? writer = _writer;
+    if (writer == null) return false;
+
+    await writer.writeFrame(
+      DeviceFrame(messageType: messageType, seq: _nextSeq(), payload: <int>[]),
+    );
+
+    return true;
+  }
+
+  /// Request the device's current health state.
+  Future<bool> sendHealthRequest() {
+    return _sendEmptyCommand(DeviceMessageType.healthRequest);
+  }
+
+  /// Send a protocol-level disconnect frame without closing the transport.
+  Future<bool> sendProtocolDisconnect() {
+    return _sendEmptyCommand(DeviceMessageType.disconnect);
+  }
+
   /// Start a VO₂ calibration session.
   ///
   /// If [profile] is provided it is sent to the device first, then a
@@ -138,8 +184,8 @@ class DeviceProtocolSession extends ChangeNotifier {
   /// Process an incoming data event from the device transport.
   ///
   /// Parses the JSON payload, then dispatches based on [DeviceMessageType].
-  /// Non-protocol events (parse failures) as well as sensor/RPE/classifier
-  /// messages are silently ignored.
+  /// Non-protocol events (parse failures) are ignored. Passive protocol events
+  /// update session diagnostics without starting product flows.
   Future<void> handleDataEvent(ReceiverDataEvent event) async {
     final DeviceProtocolJsonResult? result = DeviceProtocolJsonParser.tryParse(
       event.payload,
@@ -148,15 +194,25 @@ class DeviceProtocolSession extends ChangeNotifier {
 
     switch (result.messageType) {
       case DeviceMessageType.profile:
+        _lastProtocolMessageType = result.messageType;
         // The device is asking for our profile – respond if we can write.
         if (_writer != null) {
           await sendProfile(_currentProfile);
         }
+        notifyListeners();
+
+      case DeviceMessageType.profileAck:
+        final ProfileAckPayload? p = result.typedPayload as ProfileAckPayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestProfileAck = p;
+        notifyListeners();
 
       case DeviceMessageType.calibrationProgress:
         final CalibrationProgressPayload? p =
             result.typedPayload as CalibrationProgressPayload?;
         if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
         _calibrationState = DeviceProtocolCalibrationState.running;
         _calibrationElapsedMs = p.elapsedMs;
         _calibrationHrEstimate = p.hrEstimate;
@@ -167,6 +223,7 @@ class DeviceProtocolSession extends ChangeNotifier {
         final CalibrationDonePayload? p =
             result.typedPayload as CalibrationDonePayload?;
         if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
         _calibrationState = DeviceProtocolCalibrationState.completed;
         _calibrationDone = p;
         _calibrationProgress = 1.0;
@@ -175,6 +232,7 @@ class DeviceProtocolSession extends ChangeNotifier {
       case DeviceMessageType.error:
         final ErrorPayload? p = result.typedPayload as ErrorPayload?;
         if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
         _calibrationState = DeviceProtocolCalibrationState.error;
         _protocolError = p;
         notifyListeners();
@@ -183,17 +241,68 @@ class DeviceProtocolSession extends ChangeNotifier {
         final Vo2PredictionPayload? p =
             result.typedPayload as Vo2PredictionPayload?;
         if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
         _latestVo2Prediction = p;
+        notifyListeners();
+
+      case DeviceMessageType.healthResponse:
+        final HealthResponsePayload? p =
+            result.typedPayload as HealthResponsePayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestHealthResponse = p;
+        notifyListeners();
+
+      case DeviceMessageType.appStatus:
+        final AppStatusPayload? p = result.typedPayload as AppStatusPayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestAppStatus = p;
+        notifyListeners();
+
+      case DeviceMessageType.workoutSummary:
+        final WorkoutSummaryPayload? p =
+            result.typedPayload as WorkoutSummaryPayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestWorkoutSummary = p;
+        notifyListeners();
+
+      case DeviceMessageType.recommendationInput:
+        final RecommendationInputPayload? p =
+            result.typedPayload as RecommendationInputPayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestRecommendationInput = p;
+        notifyListeners();
+
+      case DeviceMessageType.rpe:
+        _lastProtocolMessageType = result.messageType;
+        final Object? p = result.typedPayload;
+        if (p is RpeAlertPayload) {
+          _latestRpeAlert = p;
+        } else if (p is RpePayload) {
+          // Phone-to-device RPE samples are not product behavior in Flutter.
+        } else {
+          return;
+        }
         notifyListeners();
 
       // Ignored message types – no writes, no state changes.
       case DeviceMessageType.sensorPpgImu:
-      case DeviceMessageType.rpe:
+        break;
+
       case DeviceMessageType.classifierResult:
       case DeviceMessageType.fitnessCommand:
+        _lastProtocolMessageType = result.messageType;
+        _lastUnsupportedMessageType = result.messageType;
+        notifyListeners();
         break;
 
       default:
+        _lastProtocolMessageType = result.messageType;
+        _lastUnsupportedMessageType = result.messageType;
+        notifyListeners();
         break;
     }
   }
