@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vo2_flutter/app.dart';
 import 'package:vo2_flutter/receiver/device_protocol.dart';
 import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
@@ -15,25 +16,41 @@ import 'package:vo2_flutter/screens/onboarding_screen.dart';
 import 'package:vo2_flutter/user_profile.dart';
 
 class _FakeReceiverTransport implements ReceiverTransport {
+  _FakeReceiverTransport({
+    this.transportKind = ReceiverTransportKind.classicBluetooth,
+    this.deviceName = 'Test Sensor',
+    this.deviceId = 'AA:BB',
+  });
+
   final StreamController<ReceiverTransportEvent> eventController =
       StreamController<ReceiverTransportEvent>.broadcast();
+  final ReceiverTransportKind transportKind;
+  final String deviceName;
+  final String deviceId;
+  final Completer<void> disconnectedCompleter = Completer<void>();
+  bool disconnected = false;
 
   @override
   Future<void> connect(String deviceId) async {}
 
   @override
-  Future<void> disconnect() async {}
+  Future<void> disconnect() async {
+    disconnected = true;
+    if (!disconnectedCompleter.isCompleted) {
+      disconnectedCompleter.complete();
+    }
+  }
 
   @override
   Stream<ReceiverTransportEvent> events() => eventController.stream;
 
   @override
   Future<List<ReceiverDeviceInfo>> getDevices() async {
-    return const <ReceiverDeviceInfo>[
+    return <ReceiverDeviceInfo>[
       ReceiverDeviceInfo(
-        name: 'Test Sensor',
-        id: 'AA:BB',
-        transportKind: ReceiverTransportKind.classicBluetooth,
+        name: deviceName,
+        id: deviceId,
+        transportKind: transportKind,
       ),
     ];
   }
@@ -43,6 +60,23 @@ class _FakeReceiverTransport implements ReceiverTransport {
 
   @override
   Future<bool> requestPermissions() async => true;
+}
+
+class _FakeWritableReceiverTransport extends _FakeReceiverTransport
+    implements DeviceProtocolFrameWriter {
+  _FakeWritableReceiverTransport()
+    : super(
+        transportKind: ReceiverTransportKind.ble,
+        deviceName: DeviceBleUuids.advertisedName,
+        deviceId: 'ble-1',
+      );
+
+  final List<DeviceFrame> writtenFrames = <DeviceFrame>[];
+
+  @override
+  Future<void> writeFrame(DeviceFrame frame) async {
+    writtenFrames.add(frame);
+  }
 }
 
 class _FakeDeviceProtocolFrameWriter implements DeviceProtocolFrameWriter {
@@ -76,6 +110,91 @@ void main() {
       routes: routes ?? <String, WidgetBuilder>{},
     );
   }
+
+  group('Vo2MotionApp transport selection', () {
+    testWidgets('uses Classic Bluetooth by default', (
+      WidgetTester tester,
+    ) async {
+      final List<ReceiverTransportKind> requestedKinds =
+          <ReceiverTransportKind>[];
+
+      await tester.pumpWidget(
+        Vo2MotionApp(
+          initialRoute: ConnectionScreen.routeName,
+          transportFactory: (ReceiverTransportKind kind) {
+            requestedKinds.add(kind);
+            return _FakeReceiverTransport(transportKind: kind);
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(requestedKinds, <ReceiverTransportKind>[
+        ReceiverTransportKind.classicBluetooth,
+      ]);
+      expect(find.text('Classic'), findsOneWidget);
+      expect(find.text('BLE'), findsOneWidget);
+      expect(find.text('Test Sensor (AA:BB)'), findsOneWidget);
+    });
+
+    testWidgets('BLE selection rebuilds writable protocol session', (
+      WidgetTester tester,
+    ) async {
+      final _FakeReceiverTransport classicTransport = _FakeReceiverTransport();
+      final _FakeWritableReceiverTransport bleTransport =
+          _FakeWritableReceiverTransport();
+      final List<ReceiverTransportKind> requestedKinds =
+          <ReceiverTransportKind>[];
+
+      await tester.pumpWidget(
+        Vo2MotionApp(
+          initialRoute: ConnectionScreen.routeName,
+          transportFactory: (ReceiverTransportKind kind) {
+            requestedKinds.add(kind);
+            switch (kind) {
+              case ReceiverTransportKind.classicBluetooth:
+                return classicTransport;
+              case ReceiverTransportKind.ble:
+                return bleTransport;
+            }
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('BLE'));
+      await tester.pump();
+      await tester.runAsync(() {
+        return classicTransport.disconnectedCompleter.future;
+      });
+      await tester.pumpAndSettle();
+
+      expect(requestedKinds, <ReceiverTransportKind>[
+        ReceiverTransportKind.classicBluetooth,
+        ReceiverTransportKind.ble,
+      ]);
+      expect(classicTransport.disconnected, isTrue);
+      expect(
+        find.text('${DeviceBleUuids.advertisedName} (ble-1)'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('稍後校正'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('開始校正'));
+      await tester.pump();
+
+      expect(bleTransport.writtenFrames, hasLength(2));
+      expect(
+        bleTransport.writtenFrames[0].messageType,
+        DeviceMessageType.profile,
+      );
+      expect(
+        bleTransport.writtenFrames[1].messageType,
+        DeviceMessageType.calibrationStart,
+      );
+    });
+  });
 
   testWidgets('onboarding screen renders and navigates forward', (
     WidgetTester tester,

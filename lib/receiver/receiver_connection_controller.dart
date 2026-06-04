@@ -204,9 +204,9 @@ class ReceiverConnectionController extends ChangeNotifier {
   }
 
   Future<void> disposeAsync() async {
+    await _transport.disconnect();
     await _eventSubscription?.cancel();
     _eventSubscription = null;
-    await _transport.disconnect();
   }
 
   @override
