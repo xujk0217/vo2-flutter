@@ -10,7 +10,17 @@ import 'package:vo2_flutter/screens/dashboard_page.dart';
 import 'package:vo2_flutter/widgets/connection_card.dart';
 
 typedef TransportKindChanged =
-    Future<ReceiverConnectionController> Function(ReceiverTransportKind kind);
+    Future<TransportSelectionResult> Function(ReceiverTransportKind kind);
+
+class TransportSelectionResult {
+  const TransportSelectionResult({
+    required this.connectionController,
+    required this.protocolSession,
+  });
+
+  final ReceiverConnectionController connectionController;
+  final DeviceProtocolSession protocolSession;
+}
 
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({
@@ -38,6 +48,7 @@ class ConnectionScreen extends StatefulWidget {
 class _ConnectionScreenState extends State<ConnectionScreen> {
   late ReceiverConnectionController _connectionController;
   late final bool _ownsConnectionController;
+  DeviceProtocolSession? _protocolSession;
   late ReceiverTransportKind _transportKind;
   bool _isSwitchingTransport = false;
 
@@ -52,7 +63,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           preferredDeviceId: kReferenceDeviceAddress,
         );
     _connectionController.addListener(_handleConnectionChanged);
-    widget._protocolSession?.addListener(_handleProtocolChanged);
+    _protocolSession = widget._protocolSession;
+    _protocolSession?.addListener(_handleProtocolChanged);
     _transportKind = widget._transportKind;
     unawaited(_connectionController.bootstrap());
   }
@@ -67,9 +79,11 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       _connectionController.addListener(_handleConnectionChanged);
       unawaited(_connectionController.bootstrap());
     }
-    if (oldWidget._protocolSession != widget._protocolSession) {
-      oldWidget._protocolSession?.removeListener(_handleProtocolChanged);
-      widget._protocolSession?.addListener(_handleProtocolChanged);
+    if (oldWidget._protocolSession != widget._protocolSession &&
+        _protocolSession != widget._protocolSession) {
+      _protocolSession?.removeListener(_handleProtocolChanged);
+      _protocolSession = widget._protocolSession;
+      _protocolSession?.addListener(_handleProtocolChanged);
     }
     _transportKind = widget._transportKind;
   }
@@ -106,15 +120,20 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
     final ReceiverConnectionController previousController =
         _connectionController;
-    final ReceiverConnectionController nextController = await onTransportKindChanged(
-      kind,
-    );
+    final TransportSelectionResult selection = await onTransportKindChanged(kind);
+    final ReceiverConnectionController nextController =
+        selection.connectionController;
     if (!mounted) return;
 
     if (!identical(previousController, nextController)) {
       previousController.removeListener(_handleConnectionChanged);
       _connectionController = nextController;
       _connectionController.addListener(_handleConnectionChanged);
+    }
+    if (!identical(_protocolSession, selection.protocolSession)) {
+      _protocolSession?.removeListener(_handleProtocolChanged);
+      _protocolSession = selection.protocolSession;
+      _protocolSession?.addListener(_handleProtocolChanged);
     }
     setState(() {
       _transportKind = kind;
@@ -126,7 +145,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   @override
   void dispose() {
     _connectionController.removeListener(_handleConnectionChanged);
-    widget._protocolSession?.removeListener(_handleProtocolChanged);
+    _protocolSession?.removeListener(_handleProtocolChanged);
     if (_ownsConnectionController) {
       _connectionController.dispose();
     }
@@ -134,7 +153,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   }
 
   String? _healthStatusLabel() {
-    final health = widget._protocolSession?.latestHealthResponse;
+    final health = _protocolSession?.latestHealthResponse;
     if (health == null) return null;
     final String vo2 = health.vo2Running ? 'VO2 on' : 'VO2 off';
     final String sensor = health.sensorRunning ? 'Sensor on' : 'Sensor off';
@@ -142,7 +161,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   }
 
   String? _appStatusLabel() {
-    final status = widget._protocolSession?.latestAppStatus;
+    final status = _protocolSession?.latestAppStatus;
     if (status == null) return null;
     final String readiness = status.startWorkoutAvailable ? 'ready' : 'wait';
     return 'cal ${status.calibrationProgressPct}% / $readiness';
@@ -153,7 +172,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     final bool showingBleDiagnostics =
         _transportKind == ReceiverTransportKind.ble;
     final DeviceProtocolSession? protocolSession = showingBleDiagnostics
-        ? widget._protocolSession
+        ? _protocolSession
         : null;
 
     return Scaffold(

@@ -181,6 +181,17 @@ void main() {
         findsOneWidget,
       );
 
+      final Uint8List predictionPayload = Uint8List(12);
+      ByteData.sublistView(predictionPayload)
+        ..setUint64(0, 123456789, Endian.little)
+        ..setFloat32(8, 42.5, Endian.little);
+      bleTransport.eventController.add(
+        _bleDataEvent(DeviceMessageType.vo2Prediction, 1, predictionPayload),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(find.text('協定：0x0030'), findsOneWidget);
+
       await tester.scrollUntilVisible(find.text('稍後校正'), 200);
       await tester.tap(find.text('稍後校正'));
       await tester.pumpAndSettle();

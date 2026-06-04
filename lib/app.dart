@@ -85,11 +85,14 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
     return DeviceProtocolSession();
   }
 
-  Future<ReceiverConnectionController> _selectTransportKind(
+  Future<TransportSelectionResult> _selectTransportKind(
     ReceiverTransportKind kind,
   ) async {
     if (kind == _transportKind) {
-      return _connectionController;
+      return TransportSelectionResult(
+        connectionController: _connectionController,
+        protocolSession: _protocolSession,
+      );
     }
 
     final ReceiverConnectionController previousController =
@@ -112,7 +115,10 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
     if (!mounted) {
       nextProtocolSession.dispose();
       nextController.dispose();
-      return nextController;
+      return TransportSelectionResult(
+        connectionController: nextController,
+        protocolSession: nextProtocolSession,
+      );
     }
 
     setState(() {
@@ -121,7 +127,10 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
       _connectionController = nextController;
       _protocolSessionDisposed = false;
     });
-    return nextController;
+    return TransportSelectionResult(
+      connectionController: nextController,
+      protocolSession: nextProtocolSession,
+    );
   }
 
   @override
