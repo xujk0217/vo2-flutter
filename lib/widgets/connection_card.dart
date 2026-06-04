@@ -18,6 +18,9 @@ class ConnectionCard extends StatelessWidget {
     required this.onRefreshDevices,
     required this.onConnectPressed,
     required this.onDeviceChanged,
+    this.showBleDiagnostics = false,
+    this.lastTransportState,
+    this.lastErrorCode,
   });
 
   final List<ReceiverDeviceInfo> devices;
@@ -32,6 +35,9 @@ class ConnectionCard extends StatelessWidget {
   final Future<void> Function() onRefreshDevices;
   final Future<void> Function() onConnectPressed;
   final ValueChanged<String?> onDeviceChanged;
+  final bool showBleDiagnostics;
+  final String? lastTransportState;
+  final String? lastErrorCode;
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +113,17 @@ class ConnectionCard extends StatelessWidget {
               ),
             ),
           ),
+          if (showBleDiagnostics) ...<Widget>[
+            const SizedBox(height: 12),
+            _BleDiagnosticsPanel(
+              permissionsGranted: permissionsGranted,
+              bluetoothEnabled: bluetoothEnabled,
+              deviceCount: devices.length,
+              selectedDeviceId: selectedDeviceId,
+              lastTransportState: lastTransportState,
+              lastErrorCode: lastErrorCode,
+            ),
+          ],
           const SizedBox(height: 14),
           if (!permissionsGranted || !bluetoothEnabled)
             FilledButton.icon(
@@ -173,6 +190,80 @@ class ConnectionCard extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _BleDiagnosticsPanel extends StatelessWidget {
+  const _BleDiagnosticsPanel({
+    required this.permissionsGranted,
+    required this.bluetoothEnabled,
+    required this.deviceCount,
+    required this.selectedDeviceId,
+    required this.lastTransportState,
+    required this.lastErrorCode,
+  });
+
+  final bool permissionsGranted;
+  final bool bluetoothEnabled;
+  final int deviceCount;
+  final String? selectedDeviceId;
+  final String? lastTransportState;
+  final String? lastErrorCode;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F9FF),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFBAE6FD)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'BLE 驗證資訊',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF075985),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                _DiagnosticChip(label: '模式：BLE'),
+                _DiagnosticChip(label: permissionsGranted ? '權限：已允許' : '權限：未允許'),
+                _DiagnosticChip(label: bluetoothEnabled ? '藍牙：已開啟' : '藍牙：未開啟'),
+                _DiagnosticChip(label: '裝置數：$deviceCount'),
+                _DiagnosticChip(label: '選擇：${selectedDeviceId ?? '無'}'),
+                _DiagnosticChip(label: '狀態：${lastTransportState ?? '尚無'}'),
+                _DiagnosticChip(label: '錯誤：${lastErrorCode ?? '無'}'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DiagnosticChip extends StatelessWidget {
+  const _DiagnosticChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      label: Text(label),
+      visualDensity: VisualDensity.compact,
+      backgroundColor: Colors.white,
+      side: const BorderSide(color: Color(0xFFE0F2FE)),
     );
   }
 }

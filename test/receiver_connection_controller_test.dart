@@ -131,6 +131,44 @@ void main() {
       await controller.disposeAsync();
     });
 
+    test('records latest raw transport status for diagnostics', () async {
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+
+      transport.eventController.add(
+        const ReceiverStatusEvent(
+          state: 'write_started',
+          message: 'BLE write started.',
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.lastTransportState, 'write_started');
+      expect(controller.lastErrorCode, isNull);
+      expect(controller.statusMessage, 'BLE write started.');
+      await controller.disposeAsync();
+    });
+
+    test('records latest transport error code for diagnostics', () async {
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+
+      transport.eventController.add(
+        const ReceiverErrorEvent(
+          code: 'gatt_error',
+          message: 'GATT failed.',
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.lastTransportState, isNull);
+      expect(controller.lastErrorCode, 'gatt_error');
+      expect(controller.statusMessage, 'GATT failed.');
+      await controller.disposeAsync();
+    });
+
     test('forwards data events to multiple listeners', () async {
       final _FakeReceiverTransport transport = _FakeReceiverTransport();
       final List<String> received1 = <String>[];

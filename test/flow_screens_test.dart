@@ -179,6 +179,7 @@ void main() {
         findsOneWidget,
       );
 
+      await tester.scrollUntilVisible(find.text('稍後校正'), 200);
       await tester.tap(find.text('稍後校正'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('開始校正'));
@@ -236,6 +237,56 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('30 秒靜止校正'), findsOneWidget);
+  });
+
+  testWidgets('connection screen shows BLE diagnostics when BLE is selected', (
+    WidgetTester tester,
+  ) async {
+    final _FakeReceiverTransport transport = _FakeReceiverTransport(
+      transportKind: ReceiverTransportKind.ble,
+      deviceName: DeviceBleUuids.advertisedName,
+      deviceId: 'ble-1',
+    );
+    final ReceiverConnectionController controller =
+        ReceiverConnectionController(transport: transport);
+    addTearDown(() async {
+      await controller.disposeAsync();
+      await transport.eventController.close();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ConnectionScreen(
+          connectionController: controller,
+          transportKind: ReceiverTransportKind.ble,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    transport.eventController.add(
+      const ReceiverStatusEvent(
+        state: 'write_complete',
+        message: 'BLE write complete.',
+      ),
+    );
+    await tester.pump();
+    transport.eventController.add(
+      const ReceiverErrorEvent(code: 'gatt_error', message: 'GATT failed.'),
+    );
+    await tester.pump();
+
+    expect(find.text('BLE 驗證資訊'), findsOneWidget);
+    expect(find.text('模式：BLE'), findsOneWidget);
+    expect(find.text('權限：已允許'), findsOneWidget);
+    expect(find.text('藍牙：已開啟'), findsOneWidget);
+    expect(find.text('裝置數：1'), findsOneWidget);
+    expect(find.text('選擇：ble-1'), findsOneWidget);
+    expect(find.text('狀態：write_complete'), findsOneWidget);
+    expect(find.text('錯誤：gatt_error'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
   });
 
   group('CalibrationScreen', () {

@@ -31,6 +31,8 @@ class ReceiverConnectionController extends ChangeNotifier {
   bool _isLoadingDevices = false;
   bool _isConnecting = false;
   bool _isConnected = false;
+  String? _lastTransportState;
+  String? _lastErrorCode;
 
   List<ReceiverDeviceInfo> get devices =>
       List<ReceiverDeviceInfo>.unmodifiable(_devices);
@@ -41,6 +43,8 @@ class ReceiverConnectionController extends ChangeNotifier {
   bool get isLoadingDevices => _isLoadingDevices;
   bool get isConnecting => _isConnecting;
   bool get isConnected => _isConnected;
+  String? get lastTransportState => _lastTransportState;
+  String? get lastErrorCode => _lastErrorCode;
 
   void setDataListener(void Function(ReceiverDataEvent event)? onData) {
     _onData = onData;
@@ -185,11 +189,14 @@ class ReceiverConnectionController extends ChangeNotifier {
   void _handleTransportEvent(ReceiverTransportEvent event) {
     switch (event) {
       case ReceiverStatusEvent():
+        _lastTransportState = event.state;
+        _lastErrorCode = null;
         _statusMessage = event.message;
         _isConnecting = event.state == 'connecting';
         _isConnected = event.state == 'connected';
         notifyListeners();
       case ReceiverErrorEvent():
+        _lastErrorCode = event.code;
         _statusMessage = event.message;
         _isConnecting = false;
         _isConnected = false;

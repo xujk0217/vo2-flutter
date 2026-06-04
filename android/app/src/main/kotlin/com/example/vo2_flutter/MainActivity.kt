@@ -134,6 +134,7 @@ class MainActivity : FlutterActivity() {
             status: Int,
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                emitBleStatus("write_complete", "BLE write complete.")
                 pendingBleWriteResult?.success(true)
             } else {
                 pendingBleWriteResult?.error(
@@ -415,6 +416,8 @@ class MainActivity : FlutterActivity() {
             pendingBleWriteResult = null
             result.error("write_error", "BLE write could not start.", null)
             emitBleError("write_error", "BLE write could not start.")
+        } else {
+            emitBleStatus("write_started", "BLE write started.")
         }
     }
 

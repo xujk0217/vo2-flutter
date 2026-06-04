@@ -171,6 +171,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               onRefreshDevices: _connectionController.refreshDevices,
               onConnectPressed: _connectionController.toggleConnection,
               onDeviceChanged: _connectionController.selectDevice,
+              showBleDiagnostics: _transportKind == ReceiverTransportKind.ble,
+              lastTransportState: _connectionController.lastTransportState,
+              lastErrorCode: _connectionController.lastErrorCode,
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
