@@ -1038,64 +1038,108 @@ class _DashboardPageState extends State<DashboardPage> {
                             label: const Text('切換到下一個動作'),
                           ),
                           const SizedBox(height: 18),
-                          Text(
-                            '警告跳出時間：${_formatWarningDelay(warningDelay)}',
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          Slider(
-                            value: warningDelay.toDouble(),
-                            min: 10,
-                            max: 600,
-                            divisions: 59,
-                            label: _formatWarningDelay(warningDelay),
-                            onChanged: (double value) {
-                              setModalState(() {
-                                warningDelay = ((value / 10).round() * 10)
-                                    .clamp(10, 600);
-                              });
-                            },
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            scheduledWarnings.isEmpty
-                                ? '尚未安排警告'
-                                : '已設定於開始訓練後 ${scheduledWarnings.map(_formatWarningDelay).join('、')} 跳出警告',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: const Color(0xFF64748B)),
-                          ),
-                          const SizedBox(height: 8),
-                          FilledButton.tonalIcon(
-                            onPressed: () {
-                              final List<int> next = <int>[
-                                ...scheduledWarnings,
-                                warningDelay,
-                              ]..sort();
-                              setState(() {
-                                _warningDelayInputSeconds = warningDelay;
-                                _scheduledWarningSeconds
-                                  ..clear()
-                                  ..addAll(next);
-                              });
-                              if (_isWorkoutRunning &&
-                                  _activeWorkoutStartedAt != null) {
-                                _scheduleWarningTimers();
-                              }
-                              setModalState(() {
-                                scheduledWarnings = next;
-                              });
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    '已加入開始訓練後 ${_formatWarningDelay(warningDelay)} 的警告。',
-                                  ),
-                                ),
-                              );
-                            },
-                            icon: const Icon(
-                              Icons.notification_important_rounded,
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(18),
                             ),
-                            label: const Text('安排不穩定警告'),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    '進階提醒',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w800),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '需要復現不穩定情境或做長時間測試時，再安排訓練後提醒。',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: const Color(0xFF64748B),
+                                        ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Text(
+                                    '提醒排程：開始後 ${_formatWarningDelay(warningDelay)}',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                  Slider(
+                                    value: warningDelay.toDouble(),
+                                    min: 10,
+                                    max: 600,
+                                    divisions: 59,
+                                    label: _formatWarningDelay(warningDelay),
+                                    onChanged: (double value) {
+                                      setModalState(() {
+                                        warningDelay =
+                                            ((value / 10).round() * 10).clamp(
+                                              10,
+                                              600,
+                                            );
+                                      });
+                                    },
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    scheduledWarnings.isEmpty
+                                        ? '尚未安排提醒'
+                                        : '已設定於開始訓練後 ${scheduledWarnings.map(_formatWarningDelay).join('、')} 顯示提醒',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: const Color(0xFF64748B),
+                                        ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  FilledButton.tonalIcon(
+                                    onPressed: () {
+                                      final List<int> next = <int>[
+                                        ...scheduledWarnings,
+                                        warningDelay,
+                                      ]..sort();
+                                      setState(() {
+                                        _warningDelayInputSeconds =
+                                            warningDelay;
+                                        _scheduledWarningSeconds
+                                          ..clear()
+                                          ..addAll(next);
+                                      });
+                                      if (_isWorkoutRunning &&
+                                          _activeWorkoutStartedAt != null) {
+                                        _scheduleWarningTimers();
+                                      }
+                                      setModalState(() {
+                                        scheduledWarnings = next;
+                                      });
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            '已加入開始訓練後 ${_formatWarningDelay(warningDelay)} 的警告。',
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(
+                                      Icons.notification_important_rounded,
+                                    ),
+                                    label: const Text('加入提醒排程'),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                           if (scheduledWarnings.isNotEmpty) ...<Widget>[
                             const SizedBox(height: 10),

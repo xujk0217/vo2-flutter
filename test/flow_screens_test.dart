@@ -12,7 +12,6 @@ import 'package:vo2_flutter/receiver/receiver_transport.dart';
 import 'package:vo2_flutter/screens/calibration_screen.dart';
 import 'package:vo2_flutter/screens/connection_screen.dart';
 import 'package:vo2_flutter/screens/dashboard_page.dart';
-import 'package:vo2_flutter/screens/onboarding_screen.dart';
 import 'package:vo2_flutter/user_profile.dart';
 
 class _FakeReceiverTransport implements ReceiverTransport {
@@ -210,21 +209,25 @@ void main() {
     });
   });
 
-  testWidgets('onboarding screen renders and navigates forward', (
+  testWidgets('default app renders split-entry home and navigates forward', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
-      MaterialApp(
-        routes: <String, WidgetBuilder>{
-          OnboardingScreen.routeName: (_) => const OnboardingScreen(),
-          ConnectionScreen.routeName: (_) =>
-              ConnectionScreen(connectionController: _connectionController()),
+      Vo2MotionApp(
+        transportFactory: (ReceiverTransportKind kind) {
+          return _FakeReceiverTransport(transportKind: kind);
         },
-        initialRoute: OnboardingScreen.routeName,
       ),
     );
+    await tester.pumpAndSettle();
 
-    expect(find.text('個人資料設定'), findsNWidgets(2));
+    expect(find.text('VO2 Motion Monitor'), findsNWidgets(2));
+    expect(find.text('基本資料'), findsOneWidget);
+    expect(find.text('裝置連線'), findsOneWidget);
+    expect(find.text('校正與訓練'), findsOneWidget);
+    expect(find.text(UserProfile.defaults.summary), findsOneWidget);
+    expect(find.text('BLE 驗證資訊'), findsNothing);
+    expect(find.text('之後會在這裡放第一次進入 App 的個人資料流程。'), findsNothing);
     await tester.tap(find.text('前往裝置連線'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -496,6 +499,33 @@ void main() {
   });
 
   group('DashboardPage', () {
+    testWidgets('settings present warning timing as advanced reminders', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+
+      await tester.pumpWidget(
+        wrap(DashboardPage(connectionController: controller)),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byTooltip('設定'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('進階提醒'), findsOneWidget);
+      expect(find.text('提醒排程：開始後 10 秒'), findsOneWidget);
+      expect(find.text('尚未安排提醒'), findsOneWidget);
+      expect(find.text('加入提醒排程'), findsOneWidget);
+      expect(find.textContaining('警告跳出時間'), findsNothing);
+    });
+
     testWidgets('Classic CSV updates sample count', (
       WidgetTester tester,
     ) async {

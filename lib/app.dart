@@ -19,7 +19,7 @@ typedef ReceiverTransportFactory =
 class Vo2MotionApp extends StatefulWidget {
   const Vo2MotionApp({
     super.key,
-    this.initialRoute = DashboardPage.routeName,
+    this.initialRoute = OnboardingScreen.routeName,
     this.transportFactory,
   });
 
