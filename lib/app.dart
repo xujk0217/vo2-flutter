@@ -16,6 +16,8 @@ import 'package:vo2_flutter/user_profile.dart';
 typedef ReceiverTransportFactory =
     ReceiverTransport Function(ReceiverTransportKind kind);
 
+const String _classicReferenceDeviceAddress = 'D8:74:EF:D3:55:5F';
+
 class Vo2MotionApp extends StatefulWidget {
   const Vo2MotionApp({
     super.key,
@@ -31,11 +33,12 @@ class Vo2MotionApp extends StatefulWidget {
 }
 
 class _Vo2MotionAppState extends State<Vo2MotionApp> {
-  ReceiverTransportKind _transportKind = ReceiverTransportKind.classicBluetooth;
+  ReceiverTransportKind _transportKind = ReceiverTransportKind.ble;
   late ReceiverConnectionController _connectionController;
   late DeviceProtocolSession _protocolSession;
   late final void Function(ReceiverDataEvent event) _protocolDataListener;
   bool _protocolSessionDisposed = false;
+  UserProfile _selectedProfile = UserProfile.defaults;
 
   @override
   void initState() {
@@ -50,6 +53,7 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
       transport: transport,
     );
     _connectionController.addDataListener(_protocolDataListener);
+    unawaited(_loadSelectedProfile());
   }
 
   ReceiverTransport _createTransport(ReceiverTransportKind kind) {
@@ -73,16 +77,34 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
     return ReceiverConnectionController(
       transport: transport,
       preferredDeviceId: kind == ReceiverTransportKind.classicBluetooth
-          ? kReferenceDeviceAddress
+          ? _classicReferenceDeviceAddress
           : null,
     );
   }
 
   DeviceProtocolSession _createProtocolSession(ReceiverTransport transport) {
     if (transport case final DeviceProtocolFrameWriter writer) {
-      return DeviceProtocolSession(writer: writer);
+      return DeviceProtocolSession(
+        writer: writer,
+        initialProfile: _selectedProfile,
+      );
     }
-    return DeviceProtocolSession();
+    return DeviceProtocolSession(initialProfile: _selectedProfile);
+  }
+
+  Future<void> _loadSelectedProfile() async {
+    final UserProfile profile = await UserProfile.loadSelectedProfile();
+    if (!mounted) {
+      return;
+    }
+    _setSelectedProfile(profile);
+  }
+
+  void _setSelectedProfile(UserProfile profile) {
+    _protocolSession.updateProfile(profile);
+    setState(() {
+      _selectedProfile = profile;
+    });
   }
 
   Future<TransportSelectionResult> _selectTransportKind(
@@ -167,17 +189,21 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
         DashboardPage.routeName: (_) => DashboardPage(
           connectionController: _connectionController,
           protocolSession: _protocolSession,
+          profile: _selectedProfile,
         ),
-        OnboardingScreen.routeName: (_) => const OnboardingScreen(),
+        OnboardingScreen.routeName: (_) => OnboardingScreen(
+          onProfileSelected: _setSelectedProfile,
+        ),
         ConnectionScreen.routeName: (_) => ConnectionScreen(
           connectionController: _connectionController,
           transportKind: _transportKind,
           protocolSession: _protocolSession,
+          profile: _selectedProfile,
           onTransportKindChanged: _selectTransportKind,
         ),
         CalibrationScreen.routeName: (_) => CalibrationScreen(
           protocolSession: _protocolSession,
-          profile: UserProfile.defaults,
+          profile: _selectedProfile,
         ),
       },
     );

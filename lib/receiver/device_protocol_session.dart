@@ -81,18 +81,6 @@ class DeviceProtocolSession extends ChangeNotifier {
     _currentProfile = profile;
   }
 
-  /// Map a [UserSex] to the wire format used by [DeviceProfilePayload].
-  static int _sexToInt(UserSex sex) {
-    switch (sex) {
-      case UserSex.male:
-        return 0;
-      case UserSex.female:
-        return 1;
-      case UserSex.other:
-        return 2;
-    }
-  }
-
   // ── Sequence numbers ──────────────────────────────────────────────────────
 
   int _nextSeq() {
@@ -109,12 +97,7 @@ class DeviceProtocolSession extends ChangeNotifier {
     final DeviceProtocolFrameWriter? writer = _writer;
     if (writer == null) return false;
 
-    final DeviceProfilePayload payload = DeviceProfilePayload(
-      heightCm: profile.heightCm.round().clamp(80, 250),
-      weightKg: profile.weightKg.round().clamp(20, 250),
-      age: profile.age.clamp(5, 120),
-      sex: _sexToInt(profile.sex),
-    );
+    final DeviceProfilePayload payload = profile.deviceProfilePayload;
 
     await writer.writeFrame(
       DeviceFrame(
@@ -146,6 +129,57 @@ class DeviceProtocolSession extends ChangeNotifier {
   /// Send a protocol-level disconnect frame without closing the transport.
   Future<bool> sendProtocolDisconnect() {
     return _sendEmptyCommand(DeviceMessageType.disconnect);
+  }
+
+  Future<bool> sendFitnessCommand(
+    FitnessCommand command, {
+    int? hostTimestampMs,
+  }) async {
+    final DeviceProtocolFrameWriter? writer = _writer;
+    if (writer == null) return false;
+
+    final FitnessCommandPayload payload = FitnessCommandPayload(
+      command: command,
+      hostTimestampMs: hostTimestampMs ?? DateTime.now().millisecondsSinceEpoch,
+    );
+
+    await writer.writeFrame(
+      DeviceFrame(
+        messageType: DeviceMessageType.fitnessCommand,
+        seq: _nextSeq(),
+        payload: payload.encode(),
+      ),
+    );
+
+    return true;
+  }
+
+  Future<bool> sendStartWorkout({int? hostTimestampMs}) {
+    return sendFitnessCommand(
+      FitnessCommand.startWorkout,
+      hostTimestampMs: hostTimestampMs,
+    );
+  }
+
+  Future<bool> sendEndWorkout({int? hostTimestampMs}) {
+    return sendFitnessCommand(
+      FitnessCommand.endWorkout,
+      hostTimestampMs: hostTimestampMs,
+    );
+  }
+
+  Future<bool> sendSkipCalibration({int? hostTimestampMs}) {
+    return sendFitnessCommand(
+      FitnessCommand.skipCalibration,
+      hostTimestampMs: hostTimestampMs,
+    );
+  }
+
+  Future<bool> sendStatusRequest({int? hostTimestampMs}) {
+    return sendFitnessCommand(
+      FitnessCommand.requestStatus,
+      hostTimestampMs: hostTimestampMs,
+    );
   }
 
   /// Start a VO₂ calibration session.
@@ -292,8 +326,12 @@ class DeviceProtocolSession extends ChangeNotifier {
       case DeviceMessageType.sensorPpgImu:
         break;
 
-      case DeviceMessageType.classifierResult:
       case DeviceMessageType.fitnessCommand:
+        _lastProtocolMessageType = result.messageType;
+        notifyListeners();
+        break;
+
+      case DeviceMessageType.classifierResult:
         _lastProtocolMessageType = result.messageType;
         _lastUnsupportedMessageType = result.messageType;
         notifyListeners();

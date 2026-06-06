@@ -111,6 +111,23 @@ Uint8List _rpeAlertPayload(String message) {
   return payload;
 }
 
+void _assertFitnessCommandPayload(
+  DeviceFrame frame,
+  FitnessCommand command,
+  int expectedSeq,
+  int expectedHostTimestampMs,
+) {
+  expect(frame.messageType, DeviceMessageType.fitnessCommand);
+  expect(frame.seq, expectedSeq);
+  expect(frame.payload, hasLength(9));
+  expect(frame.payload[0], command.value);
+  expect(
+    ByteData.sublistView(Uint8List.fromList(frame.payload))
+        .getUint64(1, Endian.little),
+    expectedHostTimestampMs,
+  );
+}
+
 void main() {
   group('DeviceProtocolSession', () {
     // ── canWriteCommands / writerless ──────────────────────────────────────
@@ -256,6 +273,58 @@ void main() {
         expect(session.canWriteCommands, isFalse);
       },
     );
+
+    test('sendFitnessCommand helpers write command payloads in sequence', () async {
+      final writer = _FakeDeviceProtocolFrameWriter();
+      final DeviceProtocolSession session = DeviceProtocolSession(
+        writer: writer,
+        initialProfile: _defaultProfile,
+      );
+
+      expect(
+        await session.sendStartWorkout(hostTimestampMs: 0x0102030405060708),
+        isTrue,
+      );
+      expect(
+        await session.sendEndWorkout(hostTimestampMs: 0x1112131415161718),
+        isTrue,
+      );
+      expect(
+        await session.sendSkipCalibration(hostTimestampMs: 0x2122232425262728),
+        isTrue,
+      );
+      expect(
+        await session.sendStatusRequest(hostTimestampMs: 0x3132333435363738),
+        isTrue,
+      );
+
+      expect(writer.writtenFrames, hasLength(4));
+
+      _assertFitnessCommandPayload(
+        writer.writtenFrames[0],
+        FitnessCommand.startWorkout,
+        1,
+        0x0102030405060708,
+      );
+      _assertFitnessCommandPayload(
+        writer.writtenFrames[1],
+        FitnessCommand.endWorkout,
+        2,
+        0x1112131415161718,
+      );
+      _assertFitnessCommandPayload(
+        writer.writtenFrames[2],
+        FitnessCommand.skipCalibration,
+        3,
+        0x2122232425262728,
+      );
+      _assertFitnessCommandPayload(
+        writer.writtenFrames[3],
+        FitnessCommand.requestStatus,
+        4,
+        0x3132333435363738,
+      );
+    });
 
     // ── profile request response ──────────────────────────────────────────
 
@@ -649,10 +718,7 @@ void main() {
           session.lastProtocolMessageType,
           DeviceMessageType.fitnessCommand,
         );
-        expect(
-          session.lastUnsupportedMessageType,
-          DeviceMessageType.fitnessCommand,
-        );
+        expect(session.lastUnsupportedMessageType, DeviceMessageType.classifierResult);
         expect(session.calibrationProgress, isNull);
         expect(session.latestVo2Prediction, isNull);
         expect(writer.writtenFrames, isEmpty);

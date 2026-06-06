@@ -139,6 +139,37 @@ void main() {
       expect(String.fromCharCodes(payload.sublist(84)), 'squat');
     });
 
+    test('encodes fitness command payload command values', () {
+      expect(FitnessCommand.startWorkout.value, 0);
+      expect(FitnessCommand.endWorkout.value, 1);
+      expect(FitnessCommand.skipCalibration.value, 2);
+      expect(FitnessCommand.requestStatus.value, 3);
+    });
+
+    test('encodes fitness command payload with exact 9-byte layout', () {
+      const int hostTimestampMs = 0x0102030405060708;
+      final ByteData expectedData = ByteData(9);
+      expectedData.setUint8(0, FitnessCommand.skipCalibration.value);
+      expectedData.setUint64(1, hostTimestampMs, Endian.little);
+      final Uint8List expected = expectedData.buffer.asUint8List();
+
+      final Uint8List encoded = FitnessCommandPayload(
+        command: FitnessCommand.skipCalibration,
+        hostTimestampMs: hostTimestampMs,
+      ).encode();
+
+      expect(encoded, orderedEquals(expected));
+      expect(encoded.length, 9);
+      expect(encoded[1], 0x08);
+      expect(encoded[2], 0x07);
+      expect(encoded[3], 0x06);
+      expect(encoded[4], 0x05);
+      expect(encoded[5], 0x04);
+      expect(encoded[6], 0x03);
+      expect(encoded[7], 0x02);
+      expect(encoded[8], 0x01);
+    });
+
     test('decodes calibration_progress payload', () {
       final Uint8List payload = Uint8List(5);
       ByteData.sublistView(payload)

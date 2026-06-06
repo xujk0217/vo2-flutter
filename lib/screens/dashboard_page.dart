@@ -1,87 +1,37 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:vo2_flutter/exercise_catalog.dart';
-import 'package:vo2_flutter/exercise_illustration.dart';
-import 'package:vo2_flutter/models/workout_models.dart';
-import 'package:vo2_flutter/ppg_waveform_card.dart';
-import 'package:vo2_flutter/receiver/classic_bluetooth_transport.dart';
+import 'package:vo2_flutter/receiver/ble_receiver_transport.dart';
 import 'package:vo2_flutter/receiver/device_protocol.dart';
 import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
-import 'package:vo2_flutter/receiver/receiver_transport.dart';
-import 'package:vo2_flutter/sensor_processing.dart';
 import 'package:vo2_flutter/user_profile.dart';
-import 'package:vo2_flutter/widgets/connection_card.dart';
-import 'package:vo2_flutter/widgets/metric_card.dart';
-import 'package:vo2_flutter/widgets/muscle_map_card.dart';
-import 'package:vo2_flutter/widgets/profile_settings_dialog.dart';
-
-const String kReferenceDeviceAddress = 'D8:74:EF:D3:55:5F';
-const Duration kPpgWindow = Duration(seconds: 10);
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({
     super.key,
     ReceiverConnectionController? connectionController,
     DeviceProtocolSession? protocolSession,
+    UserProfile profile = UserProfile.defaults,
   }) : _connectionController = connectionController,
-       _protocolSession = protocolSession;
+       _protocolSession = protocolSession,
+       _profile = profile;
 
   static const String routeName = '/dashboard';
 
   final ReceiverConnectionController? _connectionController;
   final DeviceProtocolSession? _protocolSession;
+  final UserProfile _profile;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  final CsvSensorSampleParser _sampleParser = const CsvSensorSampleParser();
-  final Random _random = Random();
   late final ReceiverConnectionController _connectionController;
   late final bool _ownsConnectionController;
   DeviceProtocolSession? _protocolSession;
-  late ExerciseType _exercise;
-  late MotionEstimator _estimator;
-
-  Timer? _vo2Ticker;
-  Timer? _countdownTimer;
-  final List<Timer> _warningTimers = <Timer>[];
-
-  bool get _isConnected => _connectionController.isConnected;
-
-  UserProfile _userProfile = UserProfile.defaults;
-  WorkoutPhase _workoutPhase = WorkoutPhase.idle;
-  double _rawEstimatedVo2 = 0;
-  double _estimatedVo2 = 0;
-  double _signalScore = 0;
-  double _motionScore = 0;
-  int _animatedRepetitions = 0;
-  int _sampleCount = 0;
-  int _selectedPpgChannel = 0;
-  int _totalWorkoutRepetitions = 0;
-  int _currentExerciseRepetitions = 0;
-  int _warningDelayInputSeconds = 10;
-  int _movementQualityLevel = 4;
-  DateTime? _lastSampleAt;
-  DateTime? _lastAnimatedRepAt;
-  DateTime? _sessionStartedAt;
-  DateTime? _activeWorkoutStartedAt;
-  DateTime? _currentExerciseSegmentStartedAt;
-  DateTime? _currentInstabilityStartedAt;
-  DateTime? _unstableUntilAt;
-  double _sessionRepLift = 0.18;
-  double _sessionWaveA = 0.5;
-  double _sessionWaveB = 0.28;
-  double _sessionPhase = 0;
-  Duration _currentSegmentUnstableAccumulated = Duration.zero;
-  final List<int> _scheduledWarningSeconds = <int>[];
-  final Set<int> _triggeredWarningSeconds = <int>{};
-  final List<WorkoutSegment> _completedSegments = <WorkoutSegment>[];
-  final List<PpgFrame> _ppgFrames = <PpgFrame>[];
+  String? _commandStatus;
 
   @override
   void initState() {
@@ -89,81 +39,44 @@ class _DashboardPageState extends State<DashboardPage> {
     _ownsConnectionController = widget._connectionController == null;
     _connectionController =
         widget._connectionController ??
-        ReceiverConnectionController(
-          transport: ClassicBluetoothTransport(),
-          preferredDeviceId: kReferenceDeviceAddress,
-        );
-    _connectionController
-      ..setDataListener(_handleReceiverData)
-      ..addListener(_handleConnectionChanged);
+        ReceiverConnectionController(transport: BleReceiverTransport());
+    _connectionController.addListener(_handleConnectionChanged);
     _protocolSession = widget._protocolSession;
+    _protocolSession?.updateProfile(widget._profile);
     _protocolSession?.addListener(_handleProtocolSessionChanged);
-    _exercise = randomExercise();
-    _estimator = MotionEstimator(exercise: _exercise);
-    _refreshEstimatedVo2();
-    _vo2Ticker = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _refreshEstimatedVo2();
-        _refreshMovementQuality();
-      });
-    });
-    unawaited(_loadProfile());
-    unawaited(_bootstrap());
+    unawaited(_connectionController.bootstrap());
   }
 
-  bool get _isWorkoutRunning => _workoutPhase == WorkoutPhase.active;
-  bool get _isWorkoutPreparing => _workoutPhase == WorkoutPhase.countdown;
-  double get _displayVo2 =>
-      _protocolSession?.latestVo2Prediction?.vo2MlKgMin ?? _estimatedVo2;
-  bool get _hasProtocolVo2Prediction =>
-      _protocolSession?.latestVo2Prediction != null;
-  bool get _shouldShowVo2Metric =>
-      _shouldShowMetrics || _hasProtocolVo2Prediction;
-  bool get _hasWorkoutSession =>
-      _workoutPhase != WorkoutPhase.idle || _sessionStartedAt != null;
-  bool get _shouldShowMetrics {
-    if (!_isWorkoutRunning || _activeWorkoutStartedAt == null) {
-      return false;
+  @override
+  void didUpdateWidget(DashboardPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget._protocolSession != widget._protocolSession &&
+        _protocolSession != widget._protocolSession) {
+      _protocolSession?.removeListener(_handleProtocolSessionChanged);
+      _protocolSession = widget._protocolSession;
+      _protocolSession?.updateProfile(widget._profile);
+      _protocolSession?.addListener(_handleProtocolSessionChanged);
     }
-    return DateTime.now().difference(_activeWorkoutStartedAt!).inSeconds >= 10;
-  }
-
-  Future<void> _loadProfile() async {
-    final UserProfile profile = await UserProfile.load();
-    if (!mounted) {
-      return;
+    if (oldWidget._profile != widget._profile) {
+      _protocolSession?.updateProfile(widget._profile);
     }
-    setState(() {
-      _userProfile = profile;
-      _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
-    });
   }
 
-  Future<void> _bootstrap() async {
-    await _connectionController.bootstrap();
-  }
-
-  Future<void> _loadBondedDevices() async {
-    await _connectionController.refreshDevices();
-  }
-
-  Future<void> _toggleConnection() async {
-    await _connectionController.toggleConnection();
+  @override
+  void dispose() {
+    _connectionController.removeListener(_handleConnectionChanged);
+    _protocolSession?.removeListener(_handleProtocolSessionChanged);
+    if (_ownsConnectionController) {
+      _connectionController.dispose();
+    }
+    super.dispose();
   }
 
   void _handleConnectionChanged() {
     if (!mounted) {
       return;
     }
-    setState(() {
-      if (!_connectionController.isConnected && _hasWorkoutSession) {
-        _cancelWorkoutSession();
-        _refreshEstimatedVo2();
-      }
-    });
+    setState(() {});
   }
 
   void _handleProtocolSessionChanged() {
@@ -173,1250 +86,608 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {});
   }
 
-  void _handleReceiverData(ReceiverDataEvent event) {
-    if (!mounted) {
-      return;
-    }
-
-    if (DeviceProtocolJsonParser.tryParse(event.payload) != null) {
-      return;
-    }
-
-    final SensorSample? sample = _sampleParser.tryParse(event.payload);
-    if (sample == null) {
-      _connectionController.reportStatus('已收到原始資料，但格式尚未解析成功。');
-      return;
-    }
-
-    final DerivedMetrics metrics = _estimator.absorb(sample);
-    setState(() {
-      _signalScore = metrics.signalScore;
-      _motionScore = metrics.motionScore;
-      _sampleCount += 1;
-      _lastSampleAt = DateTime.now();
-      _appendPpgSample(sample.ppg);
-      _refreshEstimatedVo2();
-    });
-  }
-
-  void _appendPpgSample(List<double> values) {
-    final DateTime now = DateTime.now();
-    _ppgFrames.add(
-      PpgFrame(receivedAt: now, values: List<double>.from(values)),
-    );
-    final DateTime cutoff = now.subtract(kPpgWindow);
-    _ppgFrames.removeWhere(
-      (PpgFrame frame) => frame.receivedAt.isBefore(cutoff),
-    );
-  }
-
-  void _advanceExercise() {
-    final int currentIndex = exerciseCatalog.indexOf(_exercise);
-    final int nextIndex = (currentIndex + 1) % exerciseCatalog.length;
-    setState(() {
-      if (_hasWorkoutSession) {
-        _closeCurrentExerciseSegment();
-      }
-      _exercise = exerciseCatalog[nextIndex];
-      _estimator = MotionEstimator(exercise: _exercise);
-      if (_hasWorkoutSession) {
-        _currentExerciseSegmentStartedAt = DateTime.now();
-        _currentExerciseRepetitions = 0;
-        _animatedRepetitions = 0;
-        _lastAnimatedRepAt = null;
-      }
-      _signalScore = 0;
-      _motionScore = 0;
-      _sampleCount = 0;
-      _lastSampleAt = null;
-      _ppgFrames.clear();
-    });
-  }
-
-  void _handleAnimationRepCompleted() {
-    if (!mounted || !_isWorkoutRunning) {
-      return;
-    }
-    setState(() {
-      _lastAnimatedRepAt = DateTime.now();
-      _animatedRepetitions += 1;
-      _currentExerciseRepetitions += 1;
-      _totalWorkoutRepetitions += 1;
-      _refreshEstimatedVo2();
-    });
-  }
-
-  double _applyProfileAdjustment(double rawVo2) {
-    final double effort = max(rawVo2 - 8.0, 0);
-    double multiplier = 1.0;
-    multiplier += (_userProfile.heightCm - 170) * 0.0015;
-    multiplier -= (_userProfile.weightKg - 70) * 0.0022;
-    multiplier -= max(_userProfile.age - 30, 0) * 0.0018;
-    switch (_userProfile.sex) {
-      case UserSex.male:
-        multiplier += 0.025;
-      case UserSex.female:
-        multiplier -= 0.025;
-      case UserSex.other:
-        break;
-    }
-    final double adjustedEffort = effort * multiplier.clamp(0.82, 1.18);
-    return (8.0 + adjustedEffort).clamp(8.0, 30.0);
-  }
-
-  void _refreshEstimatedVo2() {
-    _rawEstimatedVo2 = _computeExerciseVo2();
-    _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
-  }
-
-  int _fatigueLevel() {
-    final double normalized = ((_displayVo2 - 8.0) / 22.0).clamp(0.0, 1.0);
-    return (1 + (normalized * 9)).round().clamp(1, 10);
-  }
-
-  String _fatigueLabel() {
-    return _fatigueLabelFor(_fatigueLevel());
-  }
-
-  String _fatigueLabelFor(int level) {
-    if (level <= 2) {
-      return '很低';
-    }
-    if (level <= 4) {
-      return '偏低';
-    }
-    if (level <= 6) {
-      return '中等';
-    }
-    if (level <= 8) {
-      return '偏高';
-    }
-    return '很高';
-  }
-
-  String _movementQualityLabel() {
-    switch (_movementQualityLevel) {
-      case 1:
-        return '失衡';
-      case 2:
-        return '偏晃';
-      case 3:
-        return '普通';
-      case 4:
-        return '穩定';
-      case 5:
-        return '很穩';
-      default:
-        return '--';
-    }
-  }
-
-  Color _movementQualityBackground() {
-    switch (_movementQualityLevel) {
-      case 1:
-        return const Color(0xFFFEE2E2);
-      case 2:
-        return const Color(0xFFFFEDD5);
-      case 3:
-        return const Color(0xFFFEF3C7);
-      case 4:
-        return const Color(0xFFDCFCE7);
-      case 5:
-        return const Color(0xFFCCFBF1);
-      default:
-        return Colors.white;
-    }
-  }
-
-  Color _fatigueBackground() {
-    final int level = _fatigueLevel();
-    if (!_shouldShowVo2Metric) {
-      return Colors.white;
-    }
-    if (level <= 3) {
-      return const Color(0xFFE0F2FE);
-    }
-    if (level <= 6) {
-      return const Color(0xFFFEF3C7);
-    }
-    if (level <= 8) {
-      return const Color(0xFFFFEDD5);
-    }
-    return const Color(0xFFFEE2E2);
-  }
-
-  void _refreshMovementQuality() {
-    if (!_isWorkoutRunning) {
-      _movementQualityLevel = 4;
-      return;
-    }
-
-    final DateTime now = DateTime.now();
-    final int? nextWarningSeconds = _nextPendingWarningSeconds();
-    if (_unstableUntilAt != null && now.isAfter(_unstableUntilAt!)) {
-      if (_currentInstabilityStartedAt != null) {
-        _currentSegmentUnstableAccumulated += _unstableUntilAt!.difference(
-          _currentInstabilityStartedAt!,
-        );
-      }
-      _currentInstabilityStartedAt = null;
-      _unstableUntilAt = null;
-    }
-
-    int minLevel = 3;
-    int maxLevel = 4;
-    if (nextWarningSeconds != null) {
-      final int remaining = nextWarningSeconds;
-      if (remaining <= 5) {
-        minLevel = 1;
-        maxLevel = 2;
-      } else if (remaining <= 10) {
-        minLevel = 2;
-        maxLevel = 3;
-      } else {
-        minLevel = 3;
-        maxLevel = 4;
-      }
-    } else if (_currentInstabilityStartedAt != null ||
-        _triggeredWarningSeconds.isNotEmpty) {
-      final int randomRoll = _random.nextInt(100);
-      if (randomRoll < 15) {
-        minLevel = 1;
-        maxLevel = 2;
-      } else if (randomRoll < 55) {
-        minLevel = 2;
-        maxLevel = 3;
-      } else {
-        minLevel = 3;
-        maxLevel = 4;
-      }
-    } else {
-      final int randomRoll = _random.nextInt(100);
-      if (randomRoll < 15) {
-        minLevel = 4;
-        maxLevel = 5;
-      }
-    }
-
-    final int target = minLevel + _random.nextInt((maxLevel - minLevel) + 1);
-    if (_movementQualityLevel < target) {
-      _movementQualityLevel += 1;
-    } else if (_movementQualityLevel > target) {
-      _movementQualityLevel -= 1;
-    }
-    _movementQualityLevel = _movementQualityLevel.clamp(minLevel, maxLevel);
-  }
-
-  void _startWorkoutSession() {
-    final DateTime now = DateTime.now();
-    _sessionStartedAt = now;
-    _currentExerciseSegmentStartedAt = now;
-    _workoutPhase = WorkoutPhase.countdown;
-    _lastAnimatedRepAt = null;
-    _completedSegments.clear();
-    _activeWorkoutStartedAt = null;
-    _currentInstabilityStartedAt = null;
-    _unstableUntilAt = null;
-    _animatedRepetitions = 0;
-    _currentExerciseRepetitions = 0;
-    _totalWorkoutRepetitions = 0;
-    _movementQualityLevel = 4;
-    _currentSegmentUnstableAccumulated = Duration.zero;
-    _triggeredWarningSeconds.clear();
-    _sessionRepLift = 0.03 + (_random.nextDouble() * 0.03);
-    _sessionWaveA = 0.16 + (_random.nextDouble() * 0.16);
-    _sessionWaveB = 0.06 + (_random.nextDouble() * 0.12);
-    _sessionPhase = _random.nextDouble() * pi * 2;
-    _rawEstimatedVo2 = 8;
-    _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
-    _scheduleCountdown();
-  }
-
-  void _cancelWorkoutSession() {
-    _countdownTimer?.cancel();
-    _cancelWarningTimers();
-    _workoutPhase = WorkoutPhase.idle;
-    _sessionStartedAt = null;
-    _activeWorkoutStartedAt = null;
-    _currentExerciseSegmentStartedAt = null;
-    _currentInstabilityStartedAt = null;
-    _unstableUntilAt = null;
-    _lastAnimatedRepAt = null;
-    _animatedRepetitions = 0;
-    _currentExerciseRepetitions = 0;
-    _totalWorkoutRepetitions = 0;
-    _completedSegments.clear();
-    _currentSegmentUnstableAccumulated = Duration.zero;
-    _triggeredWarningSeconds.clear();
-    _movementQualityLevel = 4;
-    _rawEstimatedVo2 = 8;
-    _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
-  }
-
-  double _computeExerciseVo2() {
-    if (!_isWorkoutRunning || _activeWorkoutStartedAt == null) {
-      return 8;
-    }
-    final DateTime now = DateTime.now();
-    final double elapsedSeconds =
-        now.difference(_activeWorkoutStartedAt!).inMilliseconds / 1000;
-    final double timeTrend = min(18.0, elapsedSeconds * 0.022);
-    final double repetitionTrend = min(
-      2.6,
-      _totalWorkoutRepetitions * _sessionRepLift,
-    );
-    final double signalBoost = min(0.45, max(_signalScore - 4.8, 0) * 0.12);
-    final double motionBoost = min(0.8, max(_motionScore - 0.9, 0) * 0.18);
-    final double cadenceLift;
-    if (_lastAnimatedRepAt == null) {
-      cadenceLift = 0;
-    } else {
-      final double secondsSinceRep =
-          now.difference(_lastAnimatedRepAt!).inMilliseconds / 1000;
-      cadenceLift = max(0, 4 - secondsSinceRep) * 0.03;
-    }
-    final double waveA =
-        sin((elapsedSeconds / 6.0) + _sessionPhase) * _sessionWaveA;
-    final double waveB =
-        sin(
-          (elapsedSeconds / 3.1) +
-              _sessionPhase +
-              (_totalWorkoutRepetitions * 0.28),
-        ) *
-        _sessionWaveB;
-    final double drift = min(0.9, elapsedSeconds / 600);
-
-    return (8 +
-            timeTrend +
-            repetitionTrend +
-            signalBoost +
-            motionBoost +
-            cadenceLift +
-            waveA +
-            waveB +
-            drift)
-        .clamp(8.0, 30.0);
-  }
-
-  void _scheduleCountdown() {
-    _countdownTimer?.cancel();
-    _countdownTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _workoutPhase = WorkoutPhase.active;
-        _activeWorkoutStartedAt = DateTime.now();
-        _currentExerciseSegmentStartedAt ??= DateTime.now();
-        _scheduleWarningTimers();
-      });
-    });
-  }
-
-  void _cancelWarningTimers() {
-    for (final Timer timer in _warningTimers) {
-      timer.cancel();
-    }
-    _warningTimers.clear();
-  }
-
-  int? _nextPendingWarningSeconds() {
-    if (!_isWorkoutRunning || _activeWorkoutStartedAt == null) {
-      return null;
-    }
-    final int elapsed = DateTime.now()
-        .difference(_activeWorkoutStartedAt!)
-        .inSeconds;
-    final List<int> pending =
-        _scheduledWarningSeconds
-            .where(
-              (int second) =>
-                  !_triggeredWarningSeconds.contains(second) &&
-                  second > elapsed,
-            )
-            .toList()
-          ..sort();
-    if (pending.isEmpty) {
-      return null;
-    }
-    return pending.first - elapsed;
-  }
-
-  void _scheduleWarningTimers() {
-    _cancelWarningTimers();
-    if (_activeWorkoutStartedAt == null) {
-      return;
-    }
-    final int elapsed = DateTime.now()
-        .difference(_activeWorkoutStartedAt!)
-        .inSeconds;
-    final List<int> pending =
-        _scheduledWarningSeconds
-            .where(
-              (int second) =>
-                  !_triggeredWarningSeconds.contains(second) &&
-                  second > elapsed,
-            )
-            .toList()
-          ..sort();
-    for (final int second in pending) {
-      final int delay = max(1, second - elapsed);
-      _warningTimers.add(
-        Timer(Duration(seconds: delay), () {
-          if (!mounted ||
-              !_hasWorkoutSession ||
-              _triggeredWarningSeconds.contains(second)) {
-            return;
-          }
-          _triggeredWarningSeconds.add(second);
-          _activateInstabilityWindow();
-          unawaited(_showInstabilityAlert());
-        }),
-      );
-    }
-  }
-
-  void _activateInstabilityWindow() {
-    final DateTime now = DateTime.now();
-    final Duration window = Duration(seconds: 8 + _random.nextInt(5));
-    _currentInstabilityStartedAt ??= now;
-    final DateTime candidateEnd = now.add(window);
-    if (_unstableUntilAt == null || candidateEnd.isAfter(_unstableUntilAt!)) {
-      _unstableUntilAt = candidateEnd;
-    }
-  }
-
-  Future<void> _showInstabilityAlert() async {
-    if (!mounted) {
-      return;
-    }
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('動作提醒'),
-          content: Text('${_exercise.label} 目前看起來有些不穩定，可以先休息一下再繼續。'),
-          actions: <Widget>[
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('知道了'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _closeCurrentExerciseSegment() {
-    final DateTime? startedAt = _currentExerciseSegmentStartedAt;
-    if (startedAt == null) {
-      return;
-    }
-    final DateTime now = DateTime.now();
-    Duration unstableDuration = _currentSegmentUnstableAccumulated;
-    if (_currentInstabilityStartedAt != null &&
-        now.isAfter(_currentInstabilityStartedAt!)) {
-      unstableDuration += now.difference(_currentInstabilityStartedAt!);
-    }
-    if (now.isAfter(startedAt)) {
-      _completedSegments.add(
-        WorkoutSegment(
-          exercise: _exercise,
-          startedAt: startedAt,
-          endedAt: now,
-          repetitions: _currentExerciseRepetitions,
-          unstableDuration: unstableDuration,
-        ),
-      );
-    }
-    _currentInstabilityStartedAt = null;
-    _unstableUntilAt = null;
-    _currentSegmentUnstableAccumulated = Duration.zero;
-  }
-
-  Future<void> _handleStartWorkout() async {
-    if (!_isConnected || _hasWorkoutSession) {
-      return;
-    }
-    setState(() {
-      _startWorkoutSession();
-    });
-  }
-
-  Future<void> _handleEndWorkout() async {
-    if (!_hasWorkoutSession) {
-      return;
-    }
-    final DateTime startedAt = _sessionStartedAt ?? DateTime.now();
-    final DateTime endedAt = DateTime.now();
-    final double finalVo2 = _displayVo2;
-    final int finalFatigue = _fatigueLevel();
-
-    setState(() {
-      _closeCurrentExerciseSegment();
-      _countdownTimer?.cancel();
-      _cancelWarningTimers();
-      _workoutPhase = WorkoutPhase.idle;
-      _sessionStartedAt = null;
-      _activeWorkoutStartedAt = null;
-      _currentExerciseSegmentStartedAt = null;
-      _currentInstabilityStartedAt = null;
-      _unstableUntilAt = null;
-      _lastAnimatedRepAt = null;
-      _animatedRepetitions = 0;
-      _currentExerciseRepetitions = 0;
-      _rawEstimatedVo2 = 8;
-      _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
-      _movementQualityLevel = 4;
-      _currentSegmentUnstableAccumulated = Duration.zero;
-    });
-
-    await _showWorkoutSummary(
-      startedAt: startedAt,
-      endedAt: endedAt,
-      finalVo2: finalVo2,
-      finalFatigue: finalFatigue,
-      segments: List<WorkoutSegment>.from(_completedSegments),
-    );
-
+  Future<void> _sendCommand(
+    String successLabel,
+    Future<bool> Function() command,
+  ) async {
+    final bool sent = await command();
     if (!mounted) {
       return;
     }
     setState(() {
-      _completedSegments.clear();
-      _totalWorkoutRepetitions = 0;
-      _triggeredWarningSeconds.clear();
+      _commandStatus = sent ? successLabel : '尚未連上可寫入的 BLE protocol session';
     });
   }
 
-  Future<void> _confirmEndWorkout() async {
-    if (!_hasWorkoutSession || !mounted) {
-      return;
-    }
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('結束訓練'),
-          content: const Text('確定要結束這次訓練嗎？'),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('確定'),
-            ),
-          ],
-        );
-      },
-    );
+  bool get _canWriteProtocol => _protocolSession?.canWriteCommands ?? false;
 
-    if (confirmed == true) {
-      await _handleEndWorkout();
+  bool get _canStartWorkout {
+    if (!_canWriteProtocol) {
+      return false;
     }
+    final AppStatusPayload? status = _protocolSession?.latestAppStatus;
+    return status?.startWorkoutAvailable ?? true;
   }
 
-  Future<void> _showWorkoutSummary({
-    required DateTime startedAt,
-    required DateTime endedAt,
-    required double finalVo2,
-    required int finalFatigue,
-    required List<WorkoutSegment> segments,
-  }) async {
-    final Set<MuscleGroup> allMuscles = <MuscleGroup>{};
-    for (final WorkoutSegment segment in segments) {
-      allMuscles.addAll(segment.exercise.muscleGroups);
+  bool get _hasAnyProtocolData {
+    final DeviceProtocolSession? session = _protocolSession;
+    if (session == null) {
+      return false;
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (BuildContext context) {
-        MuscleGroup? selectedMuscle;
-        return StatefulBuilder(
-          builder: (BuildContext context, void Function(void Function()) setModalState) {
-            return SafeArea(
-              child: FractionallySizedBox(
-                heightFactor: 0.86,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                  child: ListView(
-                    children: <Widget>[
-                      Text(
-                        '本次訓練摘要',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w900),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${_formatClock(startedAt)} - ${_formatClock(endedAt)} ． ${(endedAt.difference(startedAt).inMinutes)} 分鐘',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: const Color(0xFF475569),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: MetricCard(
-                              title: '結束 VO2',
-                              value: finalVo2.toStringAsFixed(1),
-                              unit: 'ml/kg/min',
-                              tone: const Color(0xFF0284C7),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: MetricCard(
-                              title: '疲勞指數',
-                              value: finalFatigue.toString(),
-                              unit: '/ 10 ${_fatigueLabelFor(finalFatigue)}',
-                              tone: const Color(0xFFDC2626),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      Text(
-                        '完成動作',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 10),
-                      ...segments.map((WorkoutSegment segment) {
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(18),
-                            boxShadow: const <BoxShadow>[
-                              BoxShadow(
-                                color: Color(0x140F172A),
-                                blurRadius: 18,
-                                offset: Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            children: <Widget>[
-                              CircleAvatar(
-                                backgroundColor: segment.exercise.endColor
-                                    .withValues(alpha: 0.16),
-                                foregroundColor: segment.exercise.endColor,
-                                child: Icon(segment.exercise.icon),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      segment.exercise.label,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      segment.wasUnstable
-                                          ? '${segment.repetitions} 次 ． ${segment.duration.inSeconds} 秒 ． 不穩定 ${segment.unstableDuration.inSeconds} 秒 (${(segment.unstableRatio * 100).round()}%)'
-                                          : '${segment.repetitions} 次 ． ${segment.duration.inSeconds} 秒',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            color: const Color(0xFF64748B),
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (segment.wasUnstable)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFEE2E2),
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: const Text('不穩定'),
-                                ),
-                            ],
-                          ),
-                        );
-                      }),
-                      const SizedBox(height: 10),
-                      Text(
-                        '訓練肌群',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 10),
-                      MuscleMapCard(
-                        highlighted: allMuscles,
-                        selected: selectedMuscle,
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: allMuscles.map((MuscleGroup group) {
-                          return FilterChip(
-                            label: Text(group.label),
-                            selected: selectedMuscle == group,
-                            onSelected: (bool selected) {
-                              setModalState(() {
-                                selectedMuscle = selected ? group : null;
-                              });
-                            },
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 18),
-                      Text(
-                        '建議與回饋',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                      ),
-                      const SizedBox(height: 10),
-                      ..._buildWorkoutAdvice(segments, finalFatigue).map(
-                        (String advice) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text('• $advice'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+    return session.latestVo2Prediction != null ||
+        session.latestAppStatus != null ||
+        session.latestHealthResponse != null ||
+        session.latestRpeAlert != null ||
+        session.latestWorkoutSummary != null ||
+        session.latestRecommendationInput != null ||
+        session.protocolError != null ||
+        session.lastProtocolMessageType != null;
   }
 
-  List<String> _buildWorkoutAdvice(
-    List<WorkoutSegment> segments,
-    int fatigueLevel,
-  ) {
-    final List<String> advice = <String>[];
-    final List<String> tempoAdvice = <String>[
-      '下次可以把離心階段放慢到 2 到 3 秒，讓肌肉張力更完整。',
-      '向心發力可以再乾淨一點，想像用穩定而不是爆衝的方式把重量推起來。',
-      '如果想讓刺激更扎實，可以維持離心慢、向心穩的節奏，不用急著搶速度。',
-      '今天的節奏下次可以試著做成「向心 1 秒、離心 3 秒」，更容易感受到目標肌群。',
-      '建議下次在離心時多控制底部位置，向心時再順暢發力，整體動作品質會更好。',
-    ];
-    if (segments.isEmpty) {
-      advice.add('今天主要完成了連線與啟動流程，下次可以把單一動作做完整一組。');
-      return advice;
-    }
-    final WorkoutSegment longestSegment = segments.reduce(
-      (WorkoutSegment a, WorkoutSegment b) => a.duration >= b.duration ? a : b,
-    );
-    advice.add('${longestSegment.exercise.label} 是今天投入最久的動作，可以優先作為下次進步追蹤基準。');
-    WorkoutSegment? unstableSegment;
-    for (final WorkoutSegment segment in segments) {
-      if (segment.unstableDuration > Duration.zero) {
-        unstableSegment = segment;
-        break;
-      }
-    }
-    if (unstableSegment != null) {
-      advice.add(
-        '${unstableSegment.exercise.label} 有一段動作較不穩，下次可先降低重量 10% 左右，專注在軌跡與節奏。',
-      );
-    } else {
-      advice.add('今天整體動作節奏穩定，可以下次小幅增加次數或延長每組時間。');
-    }
-    if (fatigueLevel >= 8) {
-      advice.add('疲勞指數偏高，建議今天補充水分並安排較完整的恢復。');
-    } else if (fatigueLevel >= 5) {
-      advice.add('疲勞累積在可接受區間，下次可以維持強度並縮短組間休息。');
-    } else {
-      advice.add('今天負荷偏輕，若動作穩定，下次可以增加重量或每組次數。');
-    }
-    advice.add(tempoAdvice[_random.nextInt(tempoAdvice.length)]);
-    return advice;
+  static String _hexMessageType(int value) {
+    return '0x${value.toRadixString(16).padLeft(4, '0')}';
   }
 
-  String _formatClock(DateTime value) {
-    final String hour = value.hour.toString().padLeft(2, '0');
-    final String minute = value.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
-  String _formatWarningDelay(int totalSeconds) {
-    final int minutes = totalSeconds ~/ 60;
-    final int seconds = totalSeconds % 60;
-    if (minutes == 0) {
-      return '$seconds 秒';
+  String _protocolSummary() {
+    final DeviceProtocolSession? session = _protocolSession;
+    if (session == null) {
+      return '等待 BLE protocol session';
     }
-    return '$minutes 分 ${seconds.toString().padLeft(2, '0')} 秒';
-  }
-
-  Future<void> _openProfileSettings() async {
-    final UserProfile? updatedProfile = await showDialog<UserProfile>(
-      context: context,
-      builder: (BuildContext context) {
-        return ProfileSettingsDialog(initialProfile: _userProfile);
-      },
-    );
-
-    if (updatedProfile == null || !mounted) {
-      return;
+    final int? messageType = session.lastProtocolMessageType;
+    if (messageType == null) {
+      return '等待 BLE protocol data';
     }
-
-    await updatedProfile.save();
-    setState(() {
-      _userProfile = updatedProfile;
-      if (_rawEstimatedVo2 > 0) {
-        _estimatedVo2 = _applyProfileAdjustment(_rawEstimatedVo2);
-      }
-    });
-  }
-
-  Future<void> _openSettingsSheet() async {
-    int warningDelay = _warningDelayInputSeconds;
-    List<int> scheduledWarnings = List<int>.from(_scheduledWarningSeconds)
-      ..sort();
-
-    if (!mounted) {
-      return;
-    }
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder:
-              (
-                BuildContext context,
-                void Function(void Function()) setModalState,
-              ) {
-                return SafeArea(
-                  child: FractionallySizedBox(
-                    heightFactor: 0.9,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                      child: ListView(
-                        children: <Widget>[
-                          Text(
-                            '設定',
-                            style: Theme.of(context).textTheme.headlineSmall
-                                ?.copyWith(fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(height: 16),
-                          FilledButton.tonalIcon(
-                            onPressed: () async {
-                              await _openProfileSettings();
-                              if (mounted) {
-                                setModalState(() {});
-                              }
-                            },
-                            icon: const Icon(Icons.person_rounded),
-                            label: const Text('編輯個人資料'),
-                          ),
-                          const SizedBox(height: 12),
-                          FilledButton.tonalIcon(
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              _advanceExercise();
-                            },
-                            icon: const Icon(Icons.skip_next_rounded),
-                            label: const Text('切換到下一個動作'),
-                          ),
-                          const SizedBox(height: 18),
-                          DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF8FAFC),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  Text(
-                                    '進階提醒',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(fontWeight: FontWeight.w800),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '需要復現不穩定情境或做長時間測試時，再安排訓練後提醒。',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: const Color(0xFF64748B),
-                                        ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Text(
-                                    '提醒排程：開始後 ${_formatWarningDelay(warningDelay)}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleSmall
-                                        ?.copyWith(fontWeight: FontWeight.w700),
-                                  ),
-                                  Slider(
-                                    value: warningDelay.toDouble(),
-                                    min: 10,
-                                    max: 600,
-                                    divisions: 59,
-                                    label: _formatWarningDelay(warningDelay),
-                                    onChanged: (double value) {
-                                      setModalState(() {
-                                        warningDelay =
-                                            ((value / 10).round() * 10).clamp(
-                                              10,
-                                              600,
-                                            );
-                                      });
-                                    },
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    scheduledWarnings.isEmpty
-                                        ? '尚未安排提醒'
-                                        : '已設定於開始訓練後 ${scheduledWarnings.map(_formatWarningDelay).join('、')} 顯示提醒',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: const Color(0xFF64748B),
-                                        ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  FilledButton.tonalIcon(
-                                    onPressed: () {
-                                      final List<int> next = <int>[
-                                        ...scheduledWarnings,
-                                        warningDelay,
-                                      ]..sort();
-                                      setState(() {
-                                        _warningDelayInputSeconds =
-                                            warningDelay;
-                                        _scheduledWarningSeconds
-                                          ..clear()
-                                          ..addAll(next);
-                                      });
-                                      if (_isWorkoutRunning &&
-                                          _activeWorkoutStartedAt != null) {
-                                        _scheduleWarningTimers();
-                                      }
-                                      setModalState(() {
-                                        scheduledWarnings = next;
-                                      });
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            '已加入開始訓練後 ${_formatWarningDelay(warningDelay)} 的警告。',
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                    icon: const Icon(
-                                      Icons.notification_important_rounded,
-                                    ),
-                                    label: const Text('加入提醒排程'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          if (scheduledWarnings.isNotEmpty) ...<Widget>[
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: scheduledWarnings.map((int second) {
-                                return InputChip(
-                                  label: Text(_formatWarningDelay(second)),
-                                  onDeleted: () {
-                                    final List<int> next = List<int>.from(
-                                      scheduledWarnings,
-                                    )..remove(second);
-                                    setState(() {
-                                      _scheduledWarningSeconds
-                                        ..clear()
-                                        ..addAll(next);
-                                      _triggeredWarningSeconds.remove(second);
-                                    });
-                                    if (_isWorkoutRunning &&
-                                        _activeWorkoutStartedAt != null) {
-                                      _scheduleWarningTimers();
-                                    }
-                                    setModalState(() {
-                                      scheduledWarnings = next;
-                                    });
-                                  },
-                                );
-                              }).toList(),
-                            ),
-                          ],
-                          const SizedBox(height: 18),
-                          Text(
-                            'PPG 波形',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 10),
-                          PpgWaveformCard(
-                            frames: List<PpgFrame>.from(_ppgFrames),
-                            selectedChannel: _selectedPpgChannel,
-                            window: kPpgWindow,
-                            onChannelSelected: (int index) {
-                              setState(() {
-                                _selectedPpgChannel = index;
-                              });
-                              setModalState(() {});
-                            },
-                          ),
-                          const SizedBox(height: 20),
-                          FilledButton(
-                            onPressed: () {
-                              setState(() {
-                                _warningDelayInputSeconds = warningDelay;
-                                _scheduledWarningSeconds
-                                  ..clear()
-                                  ..addAll(scheduledWarnings);
-                              });
-                              Navigator.of(context).pop();
-                            },
-                            child: const Text('完成'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-        );
-      },
-    );
-  }
-
-  String _selectedDeviceName() {
-    return _connectionController.selectedDeviceName();
-  }
-
-  @override
-  void dispose() {
-    _connectionController
-      ..removeListener(_handleConnectionChanged)
-      ..setDataListener(null);
-    _protocolSession?.removeListener(_handleProtocolSessionChanged);
-    _vo2Ticker?.cancel();
-    _countdownTimer?.cancel();
-    _cancelWarningTimers();
-    if (_ownsConnectionController) {
-      unawaited(_connectionController.disposeAsync());
-    }
-    super.dispose();
+    return '最後訊息 ${_hexMessageType(messageType)}';
   }
 
   @override
   Widget build(BuildContext context) {
+    final DeviceProtocolSession? session = _protocolSession;
     return Scaffold(
+      appBar: AppBar(title: const Text('即時監測')),
       body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _bootstrap,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+          children: <Widget>[
+            _DashboardHeader(
+              profile: widget._profile,
+              connectionStatus: _connectionController.statusMessage,
+              protocolSummary: _protocolSummary(),
+            ),
+            const SizedBox(height: 16),
+            _CommandCard(
+              canWriteProtocol: _canWriteProtocol,
+              canStartWorkout: _canStartWorkout,
+              commandStatus: _commandStatus,
+              onRequestStatus: () {
+                final DeviceProtocolSession? session = _protocolSession;
+                if (session == null) {
+                  return;
+                }
+                unawaited(
+                  _sendCommand('已送出狀態請求', session.sendStatusRequest),
+                );
+              },
+              onStartWorkout: () {
+                final DeviceProtocolSession? session = _protocolSession;
+                if (session == null) {
+                  return;
+                }
+                unawaited(
+                  _sendCommand('已送出開始訓練', session.sendStartWorkout),
+                );
+              },
+              onEndWorkout: () {
+                final DeviceProtocolSession? session = _protocolSession;
+                if (session == null) {
+                  return;
+                }
+                unawaited(_sendCommand('已送出結束訓練', session.sendEndWorkout));
+              },
+            ),
+            const SizedBox(height: 16),
+            if (!_hasAnyProtocolData) const _WaitingCard(),
+            if (!_hasAnyProtocolData) const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: <Widget>[
+                _Vo2Card(prediction: session?.latestVo2Prediction),
+                _AppStatusCard(status: session?.latestAppStatus),
+                _HealthCard(health: session?.latestHealthResponse),
+                _ProtocolDiagnosticsCard(session: session),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _RpeAlertCard(alert: session?.latestRpeAlert),
+            const SizedBox(height: 16),
+            _WorkoutSummaryCard(summary: session?.latestWorkoutSummary),
+            const SizedBox(height: 16),
+            _RecommendationCard(
+              recommendation: session?.latestRecommendationInput,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardHeader extends StatelessWidget {
+  const _DashboardHeader({
+    required this.profile,
+    required this.connectionStatus,
+    required this.protocolSummary,
+  });
+
+  final UserProfile profile;
+  final String connectionStatus;
+  final String protocolSummary;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            'BLE protocol monitoring',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '使用者：${profile.displayName}',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            profile.summary,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          child: Text(
-                            'VO2 Motion Monitor',
-                            style: Theme.of(context).textTheme.headlineMedium
-                                ?.copyWith(fontWeight: FontWeight.w900),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '即時運動與疲勞監測',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: const Color(0xFF475569)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton.filledTonal(
-                    onPressed: _openSettingsSheet,
-                    icon: const Icon(Icons.settings_rounded),
-                    tooltip: '設定',
-                  ),
-                ],
+              _StatusChip(label: '來源：BLE protocol'),
+              _StatusChip(label: protocolSummary),
+              _StatusChip(label: '連線：$connectionStatus'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommandCard extends StatelessWidget {
+  const _CommandCard({
+    required this.canWriteProtocol,
+    required this.canStartWorkout,
+    required this.commandStatus,
+    required this.onRequestStatus,
+    required this.onStartWorkout,
+    required this.onEndWorkout,
+  });
+
+  final bool canWriteProtocol;
+  final bool canStartWorkout;
+  final String? commandStatus;
+  final VoidCallback onRequestStatus;
+  final VoidCallback onStartWorkout;
+  final VoidCallback onEndWorkout;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            '協定控制',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              FilledButton.tonalIcon(
+                onPressed: canWriteProtocol ? onRequestStatus : null,
+                icon: const Icon(Icons.sync_rounded),
+                label: const Text('Request status'),
               ),
-              const SizedBox(height: 24),
-              SizedBox(
-                height: 360,
-                child: ExerciseIllustrationCard(
-                  exercise: _exercise,
-                  isActive: _isWorkoutRunning,
-                  repetitions: _animatedRepetitions,
-                  statusText: _isWorkoutPreparing
-                      ? '訓練進行中'
-                      : _isWorkoutRunning
-                      ? '訓練進行中'
-                      : _isConnected
-                      ? '按開始後進入訓練'
-                      : '先連接裝置',
-                  onRepCompleted: _handleAnimationRepCompleted,
-                ),
+              FilledButton.icon(
+                onPressed: canStartWorkout ? onStartWorkout : null,
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: Text(canStartWorkout ? 'Start workout' : 'Start unavailable'),
               ),
-              const SizedBox(height: 24),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: MetricCard(
-                      title: '動作品質',
-                      value: _isWorkoutRunning ? _movementQualityLabel() : '--',
-                      unit: _isWorkoutRunning
-                          ? '$_movementQualityLevel / 5'
-                          : '--',
-                      tone: const Color(0xFF0F766E),
-                      backgroundColor: _isWorkoutRunning
-                          ? _movementQualityBackground()
-                          : Colors.white,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: MetricCard(
-                      title: '疲勞指標 (VO2)',
-                      value: _shouldShowVo2Metric
-                          ? _fatigueLevel().toString()
-                          : '--',
-                      secondaryText: _shouldShowVo2Metric
-                          ? 'VO2 ${_displayVo2.toStringAsFixed(1)}'
-                          : null,
-                      unit: _shouldShowVo2Metric
-                          ? '/ 10 ${_fatigueLabel()}'
-                          : '等待資料穩定',
-                      tone: const Color(0xFFDC2626),
-                      backgroundColor: _fatigueBackground(),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: _hasWorkoutSession
-                    ? FilledButton.tonalIcon(
-                        onPressed: () {
-                          unawaited(_confirmEndWorkout());
-                        },
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(60),
-                        ),
-                        icon: const Icon(Icons.stop_rounded),
-                        label: const Text('結束訓練'),
-                      )
-                    : FilledButton.icon(
-                        onPressed: !_isConnected
-                            ? null
-                            : () {
-                                unawaited(_handleStartWorkout());
-                              },
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(60),
-                        ),
-                        icon: const Icon(Icons.play_arrow_rounded),
-                        label: const Text('開始訓練'),
-                      ),
-              ),
-              const SizedBox(height: 24),
-              ConnectionCard(
-                devices: _connectionController.devices,
-                selectedDeviceId: _connectionController.selectedDeviceId,
-                bluetoothEnabled: _connectionController.bluetoothEnabled,
-                permissionsGranted: _connectionController.permissionsGranted,
-                statusMessage: _connectionController.statusMessage,
-                isLoadingDevices: _connectionController.isLoadingDevices,
-                isConnecting: _connectionController.isConnecting,
-                isConnected: _connectionController.isConnected,
-                onRefreshDevices: _loadBondedDevices,
-                onRequestPermissions: _bootstrap,
-                onConnectPressed: _toggleConnection,
-                onDeviceChanged: (String? value) {
-                  _connectionController.selectDevice(value);
-                },
-              ),
-              const SizedBox(height: 22),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: const <BoxShadow>[
-                    BoxShadow(
-                      color: Color(0x140F172A),
-                      blurRadius: 24,
-                      offset: Offset(0, 14),
-                    ),
-                  ],
-                ),
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        const Icon(Icons.memory_rounded, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          '裝置資訊',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Text('裝置：${_selectedDeviceName()}'),
-                    const SizedBox(height: 4),
-                    Text('已接收樣本：$_sampleCount'),
-                    const SizedBox(height: 4),
-                    Text('目前動作：${_exercise.label}'),
-                    const SizedBox(height: 4),
-                    Text('個人資料：${_userProfile.summary}'),
-                    const SizedBox(height: 4),
-                    Text(
-                      '最後同步：${_lastSampleAt == null ? '--' : _lastSampleAt!.toLocal().toIso8601String()}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF64748B),
-                      ),
-                    ),
-                  ],
-                ),
+              FilledButton.tonalIcon(
+                onPressed: canWriteProtocol ? onEndWorkout : null,
+                icon: const Icon(Icons.stop_rounded),
+                label: const Text('End workout'),
               ),
             ],
           ),
-        ),
+          if (commandStatus != null) ...<Widget>[
+            const SizedBox(height: 10),
+            Text(
+              commandStatus!,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF475569),
+              ),
+            ),
+          ],
+        ],
       ),
+    );
+  }
+}
+
+class _WaitingCard extends StatelessWidget {
+  const _WaitingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return _SurfaceCard(
+      child: Row(
+        children: <Widget>[
+          const Icon(Icons.sensors_rounded, color: Color(0xFF0284C7)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '等待 BLE protocol data；尚未收到裝置回報前不顯示 0、隨機或 demo 生理指標。',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF475569),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Vo2Card extends StatelessWidget {
+  const _Vo2Card({required this.prediction});
+
+  final Vo2PredictionPayload? prediction;
+
+  @override
+  Widget build(BuildContext context) {
+    final Vo2PredictionPayload? value = prediction;
+    return _MetricTile(
+      title: 'VO2 prediction',
+      value: value == null ? '等待資料' : value.vo2MlKgMin.toStringAsFixed(1),
+      detail: value == null
+          ? '等待 BLE protocol data'
+          : 'timestampNs ${value.timestampNs}',
+      accentColor: const Color(0xFF0E7490),
+    );
+  }
+}
+
+class _AppStatusCard extends StatelessWidget {
+  const _AppStatusCard({required this.status});
+
+  final AppStatusPayload? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppStatusPayload? value = status;
+    return _MetricTile(
+      title: 'app_status',
+      value: value == null ? '等待資料' : 'cal ${value.calibrationProgressPct}%',
+      detail: value == null
+          ? '等待 BLE protocol data'
+          : 'transport ${value.transport} / conn ${value.connectionState} / ble ${value.bleTransferState}\nprofile ${value.profileReceived ? 'received' : 'pending'} / calibration ${value.calibrationState}\nlast error ${value.lastErrorCode} / start ${value.startWorkoutAvailable ? 'available' : 'unavailable'}',
+      accentColor: const Color(0xFF2563EB),
+    );
+  }
+}
+
+class _HealthCard extends StatelessWidget {
+  const _HealthCard({required this.health});
+
+  final HealthResponsePayload? health;
+
+  @override
+  Widget build(BuildContext context) {
+    final HealthResponsePayload? value = health;
+    return _MetricTile(
+      title: 'health_response',
+      value: value == null ? '等待資料' : 'VO2 ${value.vo2Running ? 'on' : 'off'}',
+      detail: value == null
+          ? '等待 BLE protocol data'
+          : 'sensor ${value.sensorRunning ? 'running' : 'stopped'}',
+      accentColor: const Color(0xFF16A34A),
+    );
+  }
+}
+
+class _ProtocolDiagnosticsCard extends StatelessWidget {
+  const _ProtocolDiagnosticsCard({required this.session});
+
+  final DeviceProtocolSession? session;
+
+  @override
+  Widget build(BuildContext context) {
+    final DeviceProtocolSession? value = session;
+    final ErrorPayload? error = value?.protocolError;
+    final int? lastMessageType = value?.lastProtocolMessageType;
+    final int? unsupportedMessageType = value?.lastUnsupportedMessageType;
+    return _MetricTile(
+      title: 'protocol diagnostics',
+      value: error == null ? '無錯誤' : 'error ${error.code}',
+      detail: <String>[
+        if (lastMessageType == null)
+          '等待 BLE protocol data'
+        else
+          'last ${_DashboardPageState._hexMessageType(lastMessageType)}',
+        if (unsupportedMessageType != null)
+          'unsupported ${_DashboardPageState._hexMessageType(unsupportedMessageType)}',
+        if (error != null) error.message,
+      ].join('\n'),
+      accentColor: const Color(0xFFEA580C),
+    );
+  }
+}
+
+class _RpeAlertCard extends StatelessWidget {
+  const _RpeAlertCard({required this.alert});
+
+  final RpeAlertPayload? alert;
+
+  @override
+  Widget build(BuildContext context) {
+    final RpeAlertPayload? value = alert;
+    return _SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _SectionTitle(title: 'RPE alert'),
+          const SizedBox(height: 8),
+          if (value == null)
+            const _EmptyProtocolText()
+          else ...<Widget>[
+            Text(
+              value.message,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'type ${value.alertType} / RPE ${value.rpe} / duration ${value.durationMs} ms / ts ${value.hostTsMs}',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF64748B),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkoutSummaryCard extends StatelessWidget {
+  const _WorkoutSummaryCard({required this.summary});
+
+  final WorkoutSummaryPayload? summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final WorkoutSummaryPayload? value = summary;
+    return _SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _SectionTitle(title: 'workout_summary'),
+          const SizedBox(height: 8),
+          if (value == null)
+            const _EmptyProtocolText()
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                _StatusChip(label: 'duration ${value.durationMs} ms'),
+                _StatusChip(label: 'movements ${value.totalMovementCount}'),
+                _StatusChip(label: 'VO2 avg ${value.vo2Avg.toStringAsFixed(1)}'),
+                _StatusChip(label: 'VO2 min ${value.vo2Min.toStringAsFixed(1)}'),
+                _StatusChip(label: 'VO2 max ${value.vo2Max.toStringAsFixed(1)}'),
+                _StatusChip(label: 'VO2 samples ${value.vo2SampleCount}'),
+                _StatusChip(label: 'RPE avg ${value.rpeAvg}'),
+                _StatusChip(label: 'RPE samples ${value.rpeSampleCount}'),
+                _StatusChip(label: 'load ${value.loadStatus}'),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecommendationCard extends StatelessWidget {
+  const _RecommendationCard({required this.recommendation});
+
+  final RecommendationInputPayload? recommendation;
+
+  @override
+  Widget build(BuildContext context) {
+    final RecommendationInputPayload? value = recommendation;
+    return _SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          _SectionTitle(title: 'recommendation_input'),
+          const SizedBox(height: 8),
+          if (value == null)
+            const _EmptyProtocolText()
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                _StatusChip(label: 'status ${value.recommendationStatus}'),
+                _StatusChip(label: 'low RPE ${value.hasLowRpeInterval}'),
+                _StatusChip(label: 'high RPE ${value.hasHighRpeInterval}'),
+                _StatusChip(label: 'load ${value.loadStatus}'),
+                _StatusChip(label: 'VO2 trend ${value.vo2Trend}'),
+                _StatusChip(label: 'low ${value.lowRpeTotalMs} ms'),
+                _StatusChip(label: 'high ${value.highRpeTotalMs} ms'),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricTile extends StatelessWidget {
+  const _MetricTile({
+    required this.title,
+    required this.value,
+    required this.detail,
+    required this.accentColor,
+  });
+
+  final String title;
+  final String value;
+  final String detail;
+  final Color accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final double width = (MediaQuery.sizeOf(context).width - 52) / 2;
+    return Container(
+      width: width < 180 ? double.infinity : width,
+      constraints: const BoxConstraints(minHeight: 168),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x140F172A),
+            blurRadius: 18,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: accentColor,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            detail,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: const Color(0xFF64748B),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title,
+      style: Theme.of(
+        context,
+      ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+    );
+  }
+}
+
+class _EmptyProtocolText extends StatelessWidget {
+  const _EmptyProtocolText();
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '等待 BLE protocol data',
+      style: Theme.of(
+        context,
+      ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      label: Text(label),
+      visualDensity: VisualDensity.compact,
+      backgroundColor: const Color(0xFFF8FAFC),
+      side: const BorderSide(color: Color(0xFFE2E8F0)),
+    );
+  }
+}
+
+class _SurfaceCard extends StatelessWidget {
+  const _SurfaceCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x140F172A),
+            blurRadius: 24,
+            offset: Offset(0, 14),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: child,
     );
   }
 }

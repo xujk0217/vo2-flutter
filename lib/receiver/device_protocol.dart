@@ -44,6 +44,35 @@ class DeviceMessageType {
   static const int recommendationInput = 0x0105;
 }
 
+enum FitnessCommand {
+  startWorkout(0),
+  endWorkout(1),
+  skipCalibration(2),
+  requestStatus(3);
+
+  const FitnessCommand(this.value);
+
+  final int value;
+}
+
+class FitnessCommandPayload {
+  const FitnessCommandPayload({
+    required this.command,
+    required this.hostTimestampMs,
+  });
+
+  final FitnessCommand command;
+  final int hostTimestampMs;
+
+  Uint8List encode() {
+    final Uint8List bytes = Uint8List(9);
+    final ByteData data = ByteData.sublistView(bytes);
+    data.setUint8(0, command.value);
+    data.setUint64(1, hostTimestampMs, Endian.little);
+    return bytes;
+  }
+}
+
 class DeviceProtocolConstants {
   const DeviceProtocolConstants._();
 

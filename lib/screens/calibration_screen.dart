@@ -5,8 +5,6 @@ import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/screens/dashboard_page.dart';
 import 'package:vo2_flutter/user_profile.dart';
 
-enum CalibrationStatus { initial, running, completed }
-
 class CalibrationScreen extends StatefulWidget {
   const CalibrationScreen({
     super.key,
@@ -25,12 +23,11 @@ class CalibrationScreen extends StatefulWidget {
 }
 
 class _CalibrationScreenState extends State<CalibrationScreen> {
-  CalibrationStatus _status = CalibrationStatus.initial;
-  int _secondsLeft = 30;
-  Timer? _timer;
+  bool _isSendingCommand = false;
 
   DeviceProtocolSession? get _protocolSession => widget._protocolSession;
   bool get _usesProtocol => _protocolSession?.canWriteCommands ?? false;
+  UserProfile get _selectedProfile => widget._profile ?? UserProfile.defaults;
 
   @override
   void initState() {
@@ -49,7 +46,6 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
   @override
   void dispose() {
-    _timer?.cancel();
     _protocolSession?.removeListener(_handleProtocolSessionChanged);
     super.dispose();
   }
@@ -62,32 +58,44 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   }
 
   Future<void> _startCalibration() async {
-    if (_usesProtocol) {
-      _timer?.cancel();
-      await _protocolSession!.startCalibration(profile: widget._profile);
+    final DeviceProtocolSession? session = _protocolSession;
+    if (session == null || !session.canWriteCommands) {
       return;
     }
 
     setState(() {
-      _status = CalibrationStatus.running;
-      _secondsLeft = 30;
+      _isSendingCommand = true;
     });
-
-    _timer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
+    await session.startCalibration(profile: _selectedProfile);
+    if (mounted) {
       setState(() {
-        if (_secondsLeft > 1) {
-          _secondsLeft--;
-        } else {
-          _secondsLeft = 0;
-          _status = CalibrationStatus.completed;
-          timer.cancel();
-        }
+        _isSendingCommand = false;
       });
+    }
+  }
+
+  Future<void> _skipCalibration() async {
+    final DeviceProtocolSession? session = _protocolSession;
+    if (session == null || !session.canWriteCommands) {
+      return;
+    }
+
+    setState(() {
+      _isSendingCommand = true;
     });
+    final bool sent = await session.sendSkipCalibration();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isSendingCommand = false;
+    });
+    if (sent) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        DashboardPage.routeName,
+        (Route<dynamic> route) => route.isFirst,
+      );
+    }
   }
 
   @override
@@ -95,16 +103,12 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     final DeviceProtocolSession? protocolSession = _protocolSession;
     final DeviceProtocolCalibrationState? protocolState =
         protocolSession?.calibrationState;
-    final bool isInitial = _usesProtocol
-        ? protocolState == DeviceProtocolCalibrationState.idle ||
-              protocolState == DeviceProtocolCalibrationState.error
-        : _status == CalibrationStatus.initial;
-    final bool isRunning = _usesProtocol
-        ? protocolState == DeviceProtocolCalibrationState.running
-        : _status == CalibrationStatus.running;
-    final bool isCompleted = _usesProtocol
-        ? protocolState == DeviceProtocolCalibrationState.completed
-        : _status == CalibrationStatus.completed;
+    final bool isInitial = protocolState == null ||
+        protocolState == DeviceProtocolCalibrationState.idle ||
+        protocolState == DeviceProtocolCalibrationState.error;
+    final bool isRunning = protocolState == DeviceProtocolCalibrationState.running;
+    final bool isCompleted =
+        protocolState == DeviceProtocolCalibrationState.completed;
 
     return Scaffold(
       appBar: AppBar(title: const Text('靜止校正')),
@@ -125,10 +129,27 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                       fontWeight: FontWeight.w900,
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '使用者：${_selectedProfile.displayName}',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF64748B),
+                    ),
+                  ),
                   const SizedBox(height: 12),
+                  if (!_usesProtocol)
+                    Text(
+                      '此 BLE-first 流程需要可寫入的 DeviceProtocolSession；未連上支援協定的 BLE 裝置前，不會模擬校正狀態。',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: const Color(0xFFB45309),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   if (isInitial)
                     Text(
-                      '請保持靜止，然後點擊下方按鈕開始校正。',
+                      '請保持靜止，然後點擊下方按鈕由 BLE 協定開始校正。',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: const Color(0xFF475569),
@@ -153,41 +174,29 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    if (_usesProtocol) ...<Widget>[
+                    Text(
+                      protocolSession?.calibrationElapsedMs == null
+                          ? '等待裝置回報進度'
+                          : '已進行 ${protocolSession!.calibrationElapsedMs! ~/ 1000} 秒',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (protocolSession?.calibrationHrEstimate != null)
                       Text(
-                        protocolSession?.calibrationElapsedMs == null
-                            ? '等待裝置回報進度'
-                            : '已進行 ${protocolSession!.calibrationElapsedMs! ~/ 1000} 秒',
+                        '心率估計：${protocolSession!.calibrationHrEstimate} bpm',
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.headlineMedium
-                            ?.copyWith(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (protocolSession?.calibrationHrEstimate != null)
-                        Text(
-                          '心率估計：${protocolSession!.calibrationHrEstimate} bpm',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: const Color(0xFF475569)),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: const Color(0xFF475569),
                         ),
-                    ] else
-                      Text(
-                        '剩餘 $_secondsLeft 秒',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.headlineMedium
-                            ?.copyWith(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.bold,
-                            ),
                       ),
                     const SizedBox(height: 16),
                     LinearProgressIndicator(
-                      value: _usesProtocol
-                          ? protocolSession?.calibrationProgress ?? 0
-                          : (30 - _secondsLeft) / 30,
+                      value: protocolSession?.calibrationProgress ?? 0,
                     ),
                   ],
                   if (isCompleted) ...<Widget>[
@@ -215,12 +224,41 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                   ],
                   const SizedBox(height: 32),
                   if (isInitial)
-                    FilledButton(
-                      onPressed: () {
-                        unawaited(_startCalibration());
-                      },
-                      child: const Text('開始校正'),
+                    FilledButton.icon(
+                      onPressed: !_usesProtocol || _isSendingCommand
+                          ? null
+                          : () {
+                              unawaited(_startCalibration());
+                            },
+                      icon: _isSendingCommand
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.play_arrow_rounded),
+                      label: const Text('開始校正'),
                     ),
+                  const SizedBox(height: 10),
+                  FilledButton.tonalIcon(
+                    onPressed: !_usesProtocol || _isSendingCommand
+                        ? null
+                        : () {
+                            unawaited(_skipCalibration());
+                          },
+                    icon: const Icon(Icons.skip_next_rounded),
+                    label: const Text('跳過校正'),
+                  ),
+                  if (!_usesProtocol) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Text(
+                      '跳過校正也必須透過 BLE fitness command 傳送，現在無法使用。',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
                   if (isCompleted)
                     FilledButton(
                       onPressed: () {

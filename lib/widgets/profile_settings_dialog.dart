@@ -50,10 +50,13 @@ class _ProfileSettingsDialogState extends State<ProfileSettingsDialog> {
 
     Navigator.of(context).pop(
       UserProfile(
+        id: widget.initialProfile.id,
+        displayName: widget.initialProfile.displayName,
         heightCm: height.clamp(100, 230),
         weightKg: weight.clamp(20, 250),
         age: age.clamp(5, 120),
         sex: _sex,
+        vo2Max: widget.initialProfile.vo2Max,
       ),
     );
   }
