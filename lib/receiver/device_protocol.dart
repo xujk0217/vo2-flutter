@@ -14,7 +14,6 @@ class DeviceBleUuids {
     'bt_fucktrae_young',
     'btfy',
   ];
-
   static bool isAcceptedAdvertisedName(String? name) {
     return advertisedNames.contains(name);
   }
@@ -326,6 +325,30 @@ class DeviceSensorPayload {
     bytes.setRange(84, bytes.length, actionType);
     return bytes;
   }
+
+  static DeviceSensorPayload decode(List<int> payload) {
+    if (payload.length < 84) {
+      throw const FormatException('Invalid sensor_ppg_imu payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    int offset = 8;
+    final List<double> ppgChannels = List<double>.generate(10, (_) {
+      final double value = data.getFloat32(offset, Endian.little);
+      offset += 4;
+      return value;
+    });
+    final List<double> imuChannels = List<double>.generate(9, (_) {
+      final double value = data.getFloat32(offset, Endian.little);
+      offset += 4;
+      return value;
+    });
+    return DeviceSensorPayload(
+      hostTimestampUs: data.getUint64(0, Endian.little),
+      ppgChannels: ppgChannels,
+      imuChannels: imuChannels,
+      actionType: payload.sublist(84),
+    );
+  }
 }
 
 class CalibrationProgressPayload {
@@ -400,14 +423,69 @@ class Vo2PredictionPayload {
   }
 }
 
+class DebugQualityPayload {
+  const DebugQualityPayload({
+    required this.sampleCount,
+    required this.qualityFlags,
+    required this.ppgMin,
+    required this.ppgMax,
+    required this.ppgRange,
+    required this.nirsAvailable,
+    required this.sampleRateEstimateHz,
+    required this.ppgPairQualityMask,
+    required this.ppgPairFlatlineMask,
+    required this.ppgPairAutocorrSimilarMask,
+    required this.artinisScorePresent,
+    required double rawArtinisScore,
+  }) : _rawArtinisScore = rawArtinisScore;
+
+  final int sampleCount;
+  final int qualityFlags;
+  final double ppgMin;
+  final double ppgMax;
+  final double ppgRange;
+  final bool nirsAvailable;
+  final double sampleRateEstimateHz;
+  final int ppgPairQualityMask;
+  final int ppgPairFlatlineMask;
+  final int ppgPairAutocorrSimilarMask;
+  final bool artinisScorePresent;
+  final double _rawArtinisScore;
+
+  double? get artinisScore => artinisScorePresent ? _rawArtinisScore : null;
+
+  static DebugQualityPayload decode(List<int> payload) {
+    if (payload.length != 31) {
+      throw const FormatException('Invalid debug_quality payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    return DebugQualityPayload(
+      sampleCount: data.getUint16(0, Endian.little),
+      qualityFlags: data.getUint32(2, Endian.little),
+      ppgMin: data.getFloat32(6, Endian.little),
+      ppgMax: data.getFloat32(10, Endian.little),
+      ppgRange: data.getFloat32(14, Endian.little),
+      nirsAvailable: data.getUint8(18) != 0,
+      sampleRateEstimateHz: data.getFloat32(19, Endian.little),
+      ppgPairQualityMask: data.getUint8(23),
+      ppgPairFlatlineMask: data.getUint8(24),
+      ppgPairAutocorrSimilarMask: data.getUint8(25),
+      artinisScorePresent: data.getUint8(26) != 0,
+      rawArtinisScore: data.getFloat32(27, Endian.little),
+    );
+  }
+}
+
 class HealthResponsePayload {
   const HealthResponsePayload({
     required this.vo2Running,
     required this.sensorRunning,
+    required this.classifierRunning,
   });
 
   final bool vo2Running;
   final bool sensorRunning;
+  final bool classifierRunning;
 
   static HealthResponsePayload decode(List<int> payload) {
     if (payload.length != 1) {
@@ -417,6 +495,54 @@ class HealthResponsePayload {
     return HealthResponsePayload(
       vo2Running: (bitfield & 0x01) != 0,
       sensorRunning: (bitfield & 0x02) != 0,
+      classifierRunning: (bitfield & 0x04) != 0,
+    );
+  }
+}
+
+class ClassifierResultPayload {
+  const ClassifierResultPayload({
+    required this.hostTsMs,
+    required this.mode,
+    required this.movementId,
+    required this.reps,
+    required this.sets,
+  });
+
+  final int hostTsMs;
+  final int mode;
+  final int movementId;
+  final int reps;
+  final int sets;
+
+  bool get isFitness => mode == 1;
+
+  String get movementLabel {
+    return switch (movementId) {
+      0 => 'db_bench_press',
+      1 => 'db_biceps_curl',
+      2 => 'db_rdl',
+      3 => 'db_shoulder_press',
+      4 => 'db_squat',
+      5 => 'db_triceps_curl',
+      6 => 'db_weighted_crunch',
+      7 => 'one_arm_db_row',
+      255 => 'other',
+      _ => 'unknown',
+    };
+  }
+
+  static ClassifierResultPayload decode(List<int> payload) {
+    if (payload.length != 14) {
+      throw const FormatException('Invalid classifier_result payload');
+    }
+    final ByteData data = ByteData.sublistView(Uint8List.fromList(payload));
+    return ClassifierResultPayload(
+      hostTsMs: data.getUint64(0, Endian.little),
+      mode: data.getUint8(8),
+      movementId: data.getUint8(9),
+      reps: data.getUint16(10, Endian.little),
+      sets: data.getUint16(12, Endian.little),
     );
   }
 }
@@ -724,9 +850,27 @@ class DeviceProtocolJsonParser {
         } catch (_) {
           return null;
         }
+      case DeviceMessageType.debugQuality:
+        try {
+          typedPayload = DebugQualityPayload.decode(decodedPayload);
+        } catch (_) {
+          return null;
+        }
       case DeviceMessageType.healthResponse:
         try {
           typedPayload = HealthResponsePayload.decode(decodedPayload);
+        } catch (_) {
+          return null;
+        }
+      case DeviceMessageType.sensorPpgImu:
+        try {
+          typedPayload = DeviceSensorPayload.decode(decodedPayload);
+        } catch (_) {
+          return null;
+        }
+      case DeviceMessageType.classifierResult:
+        try {
+          typedPayload = ClassifierResultPayload.decode(decodedPayload);
         } catch (_) {
           return null;
         }

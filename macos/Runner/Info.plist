@@ -26,6 +26,8 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>需要藍牙權限來連接感測器並接收 VO2 與 IMU 資料。</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>需要藍牙權限來連接感測器並接收 VO2 與 IMU 資料。</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>

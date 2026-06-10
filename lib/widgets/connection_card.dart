@@ -16,8 +16,7 @@ class ConnectionCard extends StatelessWidget {
     required this.isConnected,
     required this.onRequestPermissions,
     required this.onRefreshDevices,
-    required this.onConnectPressed,
-    required this.onDeviceChanged,
+    required this.onDevicePressed,
     this.showBleDiagnostics = false,
     this.lastTransportState,
     this.lastErrorCode,
@@ -37,8 +36,7 @@ class ConnectionCard extends StatelessWidget {
   final bool isConnected;
   final Future<void> Function() onRequestPermissions;
   final Future<void> Function() onRefreshDevices;
-  final Future<void> Function() onConnectPressed;
-  final ValueChanged<String?> onDeviceChanged;
+  final Future<void> Function(String deviceId) onDevicePressed;
   final bool showBleDiagnostics;
   final String? lastTransportState;
   final String? lastErrorCode;
@@ -146,61 +144,192 @@ class ConnectionCard extends StatelessWidget {
               label: Text(!permissionsGranted ? '允許藍牙權限' : '重新檢查藍牙狀態'),
             )
           else if (devices.isEmpty)
-            Text(
-              '沒有已配對裝置，請先在 Android 系統藍牙頁面完成配對。',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF475569)),
+            Row(
+              children: <Widget>[
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '正在自動搜尋 BLE 裝置，不需要手動重新整理。',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF475569),
+                    ),
+                  ),
+                ),
+              ],
             )
           else
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                DropdownButtonFormField<String>(
-                  initialValue:
-                      devices.any(
-                        (ReceiverDeviceInfo d) => d.id == selectedDeviceId,
-                      )
-                      ? selectedDeviceId
-                      : null,
-                  decoration: const InputDecoration(
-                    labelText: '已配對裝置',
-                    border: OutlineInputBorder(),
+                Text(
+                  '選擇裝置後會直接連線，成功後才會顯示完成。',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF475569),
                   ),
-                  items: devices
-                      .map(
-                        (ReceiverDeviceInfo device) =>
-                            DropdownMenuItem<String>(
-                              value: device.id,
-                              child: Text('${device.name} (${device.id})'),
-                            ),
-                      )
-                      .toList(),
-                  onChanged: onDeviceChanged,
                 ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: isConnecting
-                      ? null
-                      : () {
-                          unawaited(onConnectPressed());
-                        },
-                  icon: Icon(
-                    isConnected
-                        ? Icons.link_off_rounded
-                        : Icons.bluetooth_connected_rounded,
-                  ),
-                  label: Text(
-                    isConnected
-                        ? '中斷連線'
-                        : isConnecting
-                        ? '連線中...'
-                        : '開始接收資料',
+                const SizedBox(height: 10),
+                ...devices.map(
+                  (ReceiverDeviceInfo device) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _DeviceListTile(
+                      device: device,
+                      isSelected: device.id == selectedDeviceId,
+                      isConnecting:
+                          isConnecting && device.id == selectedDeviceId,
+                      isConnected: isConnected && device.id == selectedDeviceId,
+                      onPressed: isConnecting
+                          ? null
+                          : () {
+                              unawaited(onDevicePressed(device.id));
+                            },
+                    ),
                   ),
                 ),
               ],
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _DeviceListTile extends StatelessWidget {
+  const _DeviceListTile({
+    required this.device,
+    required this.isSelected,
+    required this.isConnecting,
+    required this.isConnected,
+    required this.onPressed,
+  });
+
+  final ReceiverDeviceInfo device;
+  final bool isSelected;
+  final bool isConnecting;
+  final bool isConnected;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color borderColor = isConnected
+        ? const Color(0xFF22C55E)
+        : isSelected || isConnecting
+        ? const Color(0xFF0284C7)
+        : const Color(0xFFE2E8F0);
+    final Color backgroundColor = isConnected
+        ? const Color(0xFFF0FDF4)
+        : isSelected || isConnecting
+        ? const Color(0xFFF0F9FF)
+        : Colors.white;
+
+    return Semantics(
+      button: true,
+      container: true,
+      enabled: onPressed != null,
+      onTap: onPressed,
+      label:
+          'BLE 裝置 ${device.name} ${device.id} ${isConnected
+              ? '已連線'
+              : isConnecting
+              ? '連線中'
+              : '連線'}',
+      child: ExcludeSemantics(
+        child: SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: onPressed,
+            style: OutlinedButton.styleFrom(
+              backgroundColor: backgroundColor,
+              side: BorderSide(color: borderColor),
+              foregroundColor: const Color(0xFF0F172A),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: isConnected
+                        ? const Color(0xFFDCFCE7)
+                        : const Color(0xFFE0F2FE),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    isConnected
+                        ? Icons.check_rounded
+                        : isConnecting
+                        ? Icons.bluetooth_searching_rounded
+                        : Icons.bluetooth_rounded,
+                    color: isConnected
+                        ? const Color(0xFF16A34A)
+                        : const Color(0xFF0284C7),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        device.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        device.id,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                if (isConnected)
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        Icons.check_circle_rounded,
+                        color: Color(0xFF16A34A),
+                      ),
+                      SizedBox(width: 4),
+                      Text('已連線'),
+                    ],
+                  )
+                else if (isConnecting)
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Text('連線中'),
+                    ],
+                  )
+                else
+                  const Text('連線'),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -261,7 +390,9 @@ class _BleDiagnosticsPanel extends StatelessWidget {
               runSpacing: 8,
               children: <Widget>[
                 _DiagnosticChip(label: '模式：BLE'),
-                _DiagnosticChip(label: permissionsGranted ? '權限：已允許' : '權限：未允許'),
+                _DiagnosticChip(
+                  label: permissionsGranted ? '權限：已允許' : '權限：未允許',
+                ),
                 _DiagnosticChip(label: bluetoothEnabled ? '藍牙：已開啟' : '藍牙：未開啟'),
                 _DiagnosticChip(label: '裝置數：$deviceCount'),
                 _DiagnosticChip(label: '選擇：${selectedDeviceId ?? '無'}'),

@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:vo2_flutter/receiver/device_protocol_session.dart';
-import 'package:vo2_flutter/screens/dashboard_page.dart';
+import 'package:vo2_flutter/screens/live_fitness_page.dart';
 import 'package:vo2_flutter/user_profile.dart';
 
 class CalibrationScreen extends StatefulWidget {
@@ -66,7 +66,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     setState(() {
       _isSendingCommand = true;
     });
-    await session.startCalibration(profile: _selectedProfile);
+    await session.startCalibration(
+      profile: _selectedProfile,
+      sendProfileFirst: session.latestProfileAck == null,
+    );
     if (mounted) {
       setState(() {
         _isSendingCommand = false;
@@ -92,7 +95,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     });
     if (sent) {
       Navigator.of(context).pushNamedAndRemoveUntil(
-        DashboardPage.routeName,
+        LiveFitnessPage.routeName,
         (Route<dynamic> route) => route.isFirst,
       );
     }
@@ -103,10 +106,12 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     final DeviceProtocolSession? protocolSession = _protocolSession;
     final DeviceProtocolCalibrationState? protocolState =
         protocolSession?.calibrationState;
-    final bool isInitial = protocolState == null ||
+    final bool isInitial =
+        protocolState == null ||
         protocolState == DeviceProtocolCalibrationState.idle ||
         protocolState == DeviceProtocolCalibrationState.error;
-    final bool isRunning = protocolState == DeviceProtocolCalibrationState.running;
+    final bool isRunning =
+        protocolState == DeviceProtocolCalibrationState.running;
     final bool isCompleted =
         protocolState == DeviceProtocolCalibrationState.completed;
 
@@ -263,11 +268,11 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                     FilledButton(
                       onPressed: () {
                         Navigator.of(context).pushNamedAndRemoveUntil(
-                          DashboardPage.routeName,
+                          LiveFitnessPage.routeName,
                           (Route<dynamic> route) => route.isFirst,
                         );
                       },
-                      child: const Text('回到即時監測首頁'),
+                      child: const Text('開始即時訓練'),
                     ),
                 ],
               ),

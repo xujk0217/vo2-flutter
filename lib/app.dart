@@ -1,16 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:vo2_flutter/receiver/ble_receiver_transport.dart';
-import 'package:vo2_flutter/receiver/classic_bluetooth_transport.dart';
 import 'package:vo2_flutter/receiver/device_protocol.dart';
 import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
 import 'package:vo2_flutter/receiver/receiver_transport.dart';
+import 'package:vo2_flutter/receiver/receiver_transport_factory.dart';
 import 'package:vo2_flutter/screens/calibration_screen.dart';
 import 'package:vo2_flutter/screens/connection_screen.dart';
 import 'package:vo2_flutter/screens/dashboard_page.dart';
+import 'package:vo2_flutter/screens/history_page.dart';
+import 'package:vo2_flutter/screens/live_fitness_page.dart';
 import 'package:vo2_flutter/screens/onboarding_screen.dart';
+import 'package:vo2_flutter/screens/training_home_screen.dart';
+import 'package:vo2_flutter/screens/workout_review_page.dart';
 import 'package:vo2_flutter/user_profile.dart';
 
 typedef ReceiverTransportFactory =
@@ -62,12 +65,7 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
       return transportFactory(kind);
     }
 
-    switch (kind) {
-      case ReceiverTransportKind.classicBluetooth:
-        return ClassicBluetoothTransport();
-      case ReceiverTransportKind.ble:
-        return BleReceiverTransport();
-    }
+    return createReceiverTransport(kind);
   }
 
   ReceiverConnectionController _createConnectionController({
@@ -191,9 +189,20 @@ class _Vo2MotionAppState extends State<Vo2MotionApp> {
           protocolSession: _protocolSession,
           profile: _selectedProfile,
         ),
-        OnboardingScreen.routeName: (_) => OnboardingScreen(
-          onProfileSelected: _setSelectedProfile,
+        TrainingHomeScreen.routeName: (_) => TrainingHomeScreen(
+          connectionController: _connectionController,
+          protocolSession: _protocolSession,
+          profile: _selectedProfile,
         ),
+        LiveFitnessPage.routeName: (_) => LiveFitnessPage(
+          connectionController: _connectionController,
+          protocolSession: _protocolSession,
+          profile: _selectedProfile,
+        ),
+        WorkoutReviewPage.routeName: (_) => const WorkoutReviewPage(),
+        HistoryPage.routeName: (_) => const HistoryPage(),
+        OnboardingScreen.routeName: (_) =>
+            OnboardingScreen(onProfileSelected: _setSelectedProfile),
         ConnectionScreen.routeName: (_) => ConnectionScreen(
           connectionController: _connectionController,
           transportKind: _transportKind,

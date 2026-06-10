@@ -13,14 +13,12 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.BluetoothSocket
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelUuid
 import androidx.core.app.ActivityCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -292,18 +290,19 @@ class MainActivity : FlutterActivity() {
 
         val serviceUuid = parseUuidArgument(call, "serviceUuid", BLE_SERVICE_UUID)
         val advertisedNames = parseAdvertisedNamesArgument(call)
+        val includeUnmatched = call.argument<Boolean>("includeUnmatched") == true
         pendingBleScanResult = result
         bleScanDevices.clear()
         emitBleStatus("scanning", "Scanning for BLE receiver...")
 
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, scanResult: ScanResult) {
-                recordBleScanResult(scanResult, serviceUuid, advertisedNames)
+                recordBleScanResult(scanResult, serviceUuid, advertisedNames, includeUnmatched)
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 results.forEach { scanResult ->
-                    recordBleScanResult(scanResult, serviceUuid, advertisedNames)
+                    recordBleScanResult(scanResult, serviceUuid, advertisedNames, includeUnmatched)
                 }
             }
 
@@ -313,17 +312,11 @@ class MainActivity : FlutterActivity() {
         }
 
         bleScanCallback = callback
-        val filters = mutableListOf(
-            ScanFilter.Builder().setServiceUuid(ParcelUuid(serviceUuid)).build(),
-        )
-        advertisedNames.forEach { advertisedName ->
-            filters.add(ScanFilter.Builder().setDeviceName(advertisedName).build())
-        }
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
         try {
-            scanner.startScan(filters, settings, callback)
+            scanner.startScan(null, settings, callback)
             mainHandler.postDelayed({ finishBleScanSuccessfully() }, BLE_SCAN_WINDOW_MS)
         } catch (exception: Exception) {
             bleScanCallback = null
@@ -713,6 +706,7 @@ class MainActivity : FlutterActivity() {
         result: ScanResult,
         serviceUuid: UUID,
         advertisedNames: List<String>,
+        includeUnmatched: Boolean,
     ) {
         val device = result.device ?: return
         val scanRecord = result.scanRecord
@@ -720,14 +714,14 @@ class MainActivity : FlutterActivity() {
         val deviceName = device.name
         val displayName = scanRecordName?.takeIf { it.isNotBlank() }
             ?: deviceName?.takeIf { it.isNotBlank() }
-            ?: advertisedNames.first()
+            ?: device.address
         val serviceMatches = scanRecord?.serviceUuids?.any { parcelUuid ->
             parcelUuid.uuid == serviceUuid
         } == true
         val nameMatches = advertisedNames.any { advertisedName ->
             scanRecordName == advertisedName || deviceName == advertisedName
         }
-        if (!serviceMatches && !nameMatches) {
+        if (!includeUnmatched && !serviceMatches && !nameMatches) {
             return
         }
 
@@ -964,7 +958,7 @@ class MainActivity : FlutterActivity() {
         private const val BLE_EVENT_CHANNEL = "vo2_flutter/ble_stream"
         private const val REQUEST_PERMISSIONS_CODE = 4101
         private const val REQUEST_BLE_PERMISSIONS_CODE = 4102
-        private const val BLE_SCAN_WINDOW_MS = 5000L
+        private const val BLE_SCAN_WINDOW_MS = 2000L
         private const val RFCOMM_CHANNEL = 1
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private val BLE_SERVICE_UUID: UUID = UUID.fromString("0000ffee-0000-1000-8000-00805f9b34fb")

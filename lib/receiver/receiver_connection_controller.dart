@@ -68,6 +68,18 @@ class ReceiverConnectionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> connectToDevice(String deviceId) async {
+    if (_isConnecting) {
+      return;
+    }
+    if (_isConnected) {
+      return;
+    }
+
+    _selectedDeviceId = deviceId;
+    await toggleConnection();
+  }
+
   Future<void> bootstrap() {
     final Future<void>? existingOperation = _bootstrapOperation;
     if (existingOperation != null) {
@@ -98,7 +110,7 @@ class ReceiverConnectionController extends ChangeNotifier {
     _bluetoothEnabled = enabled;
     if (!_isConnected && !_isConnecting) {
       _statusMessage = granted
-          ? (enabled ? '藍牙已就緒，請選擇裝置。' : '請先開啟手機藍牙。')
+          ? (enabled ? '藍牙已就緒，正在自動搜尋裝置。' : '請先開啟手機藍牙。')
           : '請允許藍牙權限。';
     }
     notifyListeners();
@@ -135,12 +147,12 @@ class ReceiverConnectionController extends ChangeNotifier {
         nextSelectedDeviceId = null;
       }
 
-      _devices = devices;
+      _devices = _mergeDevicesPreservingOrder(devices);
       _selectedDeviceId = nextSelectedDeviceId;
       if (!_isConnected && !_isConnecting) {
         _statusMessage = devices.isEmpty
-            ? '找不到已配對裝置，請先在系統藍牙設定完成配對。'
-            : '已載入 ${devices.length} 台已配對裝置。';
+            ? '尚未找到 BLE 裝置，會持續自動搜尋。'
+            : '已找到 ${devices.length} 台 BLE 裝置。';
       }
     } on PlatformException catch (error) {
       _statusMessage = error.message ?? '讀取已配對裝置失敗。';
@@ -148,6 +160,25 @@ class ReceiverConnectionController extends ChangeNotifier {
       _isLoadingDevices = false;
       notifyListeners();
     }
+  }
+
+  List<ReceiverDeviceInfo> _mergeDevicesPreservingOrder(
+    List<ReceiverDeviceInfo> scannedDevices,
+  ) {
+    final Map<String, ReceiverDeviceInfo> scannedById =
+        <String, ReceiverDeviceInfo>{
+          for (final ReceiverDeviceInfo device in scannedDevices)
+            device.id: device,
+        };
+    final List<ReceiverDeviceInfo> merged = <ReceiverDeviceInfo>[];
+    for (final ReceiverDeviceInfo existing in _devices) {
+      final ReceiverDeviceInfo? scanned = scannedById.remove(existing.id);
+      if (scanned != null) {
+        merged.add(scanned);
+      }
+    }
+    merged.addAll(scannedById.values);
+    return merged;
   }
 
   Future<void> toggleConnection() async {

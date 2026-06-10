@@ -20,7 +20,9 @@ class DeviceProtocolSession extends ChangeNotifier {
 
   final DeviceProtocolFrameWriter? _writer;
   UserProfile _currentProfile;
+  UserProfile? _lastSentProfile;
   int _seq = 1;
+  bool _profileSent = false;
 
   DeviceProtocolCalibrationState _calibrationState =
       DeviceProtocolCalibrationState.idle;
@@ -29,7 +31,10 @@ class DeviceProtocolSession extends ChangeNotifier {
   double? _calibrationProgress;
   CalibrationDonePayload? _calibrationDone;
   ErrorPayload? _protocolError;
+  DeviceSensorPayload? _latestSensorSample;
   Vo2PredictionPayload? _latestVo2Prediction;
+  DebugQualityPayload? _latestDebugQuality;
+  ClassifierResultPayload? _latestClassifierResult;
   ProfileAckPayload? _latestProfileAck;
   HealthResponsePayload? _latestHealthResponse;
   AppStatusPayload? _latestAppStatus;
@@ -55,7 +60,14 @@ class DeviceProtocolSession extends ChangeNotifier {
 
   ErrorPayload? get protocolError => _protocolError;
 
+  DeviceSensorPayload? get latestSensorSample => _latestSensorSample;
+
   Vo2PredictionPayload? get latestVo2Prediction => _latestVo2Prediction;
+
+  DebugQualityPayload? get latestDebugQuality => _latestDebugQuality;
+
+  ClassifierResultPayload? get latestClassifierResult =>
+      _latestClassifierResult;
 
   ProfileAckPayload? get latestProfileAck => _latestProfileAck;
 
@@ -79,6 +91,19 @@ class DeviceProtocolSession extends ChangeNotifier {
   /// Replace the locally-stored profile (e.g. when the user edits settings).
   void updateProfile(UserProfile profile) {
     _currentProfile = profile;
+    final UserProfile? lastSentProfile = _lastSentProfile;
+    if (lastSentProfile == null ||
+        !_sameDeviceProfile(lastSentProfile, profile)) {
+      _profileSent = false;
+    }
+  }
+
+  bool _sameDeviceProfile(UserProfile a, UserProfile b) {
+    return a.heightCm == b.heightCm &&
+        a.weightKg == b.weightKg &&
+        a.age == b.age &&
+        a.sex == b.sex &&
+        a.vo2Max == b.vo2Max;
   }
 
   // ── Sequence numbers ──────────────────────────────────────────────────────
@@ -106,6 +131,8 @@ class DeviceProtocolSession extends ChangeNotifier {
         payload: payload.encode(),
       ),
     );
+    _profileSent = true;
+    _lastSentProfile = profile;
 
     return true;
   }
@@ -188,11 +215,14 @@ class DeviceProtocolSession extends ChangeNotifier {
   /// [DeviceMessageType.calibrationStart] frame is written.  All calibration
   /// progress/result fields are reset and [calibrationState] becomes
   /// [DeviceProtocolCalibrationState.running].
-  Future<bool> startCalibration({UserProfile? profile}) async {
+  Future<bool> startCalibration({
+    UserProfile? profile,
+    bool sendProfileFirst = true,
+  }) async {
     final DeviceProtocolFrameWriter? writer = _writer;
     if (writer == null) return false;
 
-    if (profile != null) {
+    if (sendProfileFirst && profile != null && !_profileSent) {
       await sendProfile(profile);
     }
 
@@ -230,7 +260,7 @@ class DeviceProtocolSession extends ChangeNotifier {
       case DeviceMessageType.profile:
         _lastProtocolMessageType = result.messageType;
         // The device is asking for our profile – respond if we can write.
-        if (_writer != null) {
+        if (_writer != null && !_profileSent) {
           await sendProfile(_currentProfile);
         }
         notifyListeners();
@@ -279,6 +309,22 @@ class DeviceProtocolSession extends ChangeNotifier {
         _latestVo2Prediction = p;
         notifyListeners();
 
+      case DeviceMessageType.debugQuality:
+        final DebugQualityPayload? p =
+            result.typedPayload as DebugQualityPayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestDebugQuality = p;
+        notifyListeners();
+
+      case DeviceMessageType.sensorPpgImu:
+        final DeviceSensorPayload? p =
+            result.typedPayload as DeviceSensorPayload?;
+        if (p == null) return;
+        _lastProtocolMessageType = result.messageType;
+        _latestSensorSample = p;
+        notifyListeners();
+
       case DeviceMessageType.healthResponse:
         final HealthResponsePayload? p =
             result.typedPayload as HealthResponsePayload?;
@@ -322,18 +368,17 @@ class DeviceProtocolSession extends ChangeNotifier {
         }
         notifyListeners();
 
-      // Ignored message types – no writes, no state changes.
-      case DeviceMessageType.sensorPpgImu:
-        break;
-
       case DeviceMessageType.fitnessCommand:
         _lastProtocolMessageType = result.messageType;
         notifyListeners();
         break;
 
       case DeviceMessageType.classifierResult:
+        final ClassifierResultPayload? p =
+            result.typedPayload as ClassifierResultPayload?;
+        if (p == null) return;
         _lastProtocolMessageType = result.messageType;
-        _lastUnsupportedMessageType = result.messageType;
+        _latestClassifierResult = p;
         notifyListeners();
         break;
 

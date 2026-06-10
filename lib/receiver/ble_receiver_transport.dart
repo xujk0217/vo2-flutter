@@ -80,6 +80,7 @@ class BleBridgeClientAdapter implements BleBridgeClient {
               'serviceUuid': DeviceBleUuids.service,
               'advertisedNames': DeviceBleUuids.advertisedNames,
               'advertisedName': DeviceBleUuids.advertisedName,
+              'includeUnmatched': true,
             }) ??
         <dynamic>[];
     return devices.map((dynamic item) {
@@ -107,6 +108,7 @@ class BleReceiverTransport
   final BleBridgeClient _bridgeClient;
   final DeviceProtocolCodec _codec;
   final DeviceFrameDecoder _frameDecoder;
+  Future<void> _writeQueue = Future<void>.value();
 
   @override
   Future<void> connect(String deviceId) => _bridgeClient.connect(deviceId);
@@ -146,7 +148,15 @@ class BleReceiverTransport
 
   @override
   Future<void> writeFrame(DeviceFrame frame) {
-    return _bridgeClient.write(_codec.encode(frame));
+    final Uint8List bytes = _codec.encode(frame);
+    final Future<void> write = _writeQueue.then<void>(
+      (_) => _bridgeClient.write(bytes),
+    );
+    _writeQueue = write.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace stackTrace) {},
+    );
+    return write;
   }
 
   List<ReceiverTransportEvent> _mapBleEvent(Map<String, dynamic> event) {

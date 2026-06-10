@@ -49,6 +49,8 @@ class _FakeBleBridgeClient implements BleBridgeClient {
   String? connectedDeviceId;
   bool disconnected = false;
   List<int>? writtenBytes;
+  final List<List<int>> writeCalls = <List<int>>[];
+  Completer<void>? writeGate;
 
   @override
   Future<void> connect(String deviceId) async {
@@ -74,7 +76,9 @@ class _FakeBleBridgeClient implements BleBridgeClient {
 
   @override
   Future<void> write(List<int> bytes) async {
+    writeCalls.add(List<int>.from(bytes));
     writtenBytes = bytes;
+    await writeGate?.future;
   }
 }
 
@@ -235,6 +239,42 @@ void main() {
         expect(writtenFrame.seq, 4);
       },
     );
+
+    test('serializes BLE frame writes', () async {
+      final Completer<void> firstWriteGate = Completer<void>();
+      final _FakeBleBridgeClient client = _FakeBleBridgeClient()
+        ..writeGate = firstWriteGate;
+      final BleReceiverTransport transport = BleReceiverTransport(
+        bridgeClient: client,
+      );
+
+      final Future<void> firstWrite = transport.writeFrame(
+        const DeviceFrame(messageType: DeviceMessageType.healthRequest, seq: 1),
+      );
+      final Future<void> secondWrite = transport.writeFrame(
+        const DeviceFrame(messageType: DeviceMessageType.profile, seq: 2),
+      );
+      await pumpEventQueue();
+
+      expect(client.writeCalls, hasLength(1));
+      firstWriteGate.complete();
+      await firstWrite;
+      await secondWrite;
+
+      expect(client.writeCalls, hasLength(2));
+      expect(
+        const DeviceProtocolCodec()
+            .decode(Uint8List.fromList(client.writeCalls[0]))
+            .messageType,
+        DeviceMessageType.healthRequest,
+      );
+      expect(
+        const DeviceProtocolCodec()
+            .decode(Uint8List.fromList(client.writeCalls[1]))
+            .messageType,
+        DeviceMessageType.profile,
+      );
+    });
 
     test('can be used as DeviceProtocolFrameWriter', () async {
       final _FakeBleBridgeClient client = _FakeBleBridgeClient();
@@ -436,28 +476,32 @@ void main() {
       expect(client.disconnected, isFalse);
     });
 
-    test('maps version mismatch to invalid_ble_frame without disconnect', () async {
-      final _FakeBleBridgeClient client = _FakeBleBridgeClient();
-      final BleReceiverTransport transport = BleReceiverTransport(
-        bridgeClient: client,
-      );
-      final DeviceProtocolCodec codec = const DeviceProtocolCodec();
-      final Uint8List invalidVersionFrame = codec.encode(
-        const DeviceFrame(messageType: DeviceMessageType.profile, seq: 3),
-      )
-        ..[2] = 0x00;
+    test(
+      'maps version mismatch to invalid_ble_frame without disconnect',
+      () async {
+        final _FakeBleBridgeClient client = _FakeBleBridgeClient();
+        final BleReceiverTransport transport = BleReceiverTransport(
+          bridgeClient: client,
+        );
+        final DeviceProtocolCodec codec = const DeviceProtocolCodec();
+        final Uint8List invalidVersionFrame = codec.encode(
+          const DeviceFrame(messageType: DeviceMessageType.profile, seq: 3),
+        )..[2] = 0x00;
 
-      final Future<ReceiverTransportEvent> emittedFuture = transport.events().first;
-      await pumpEventQueue();
-      client.eventController.add(<String, dynamic>{
-        'type': 'data',
-        'chunk': invalidVersionFrame,
-      });
+        final Future<ReceiverTransportEvent> emittedFuture = transport
+            .events()
+            .first;
+        await pumpEventQueue();
+        client.eventController.add(<String, dynamic>{
+          'type': 'data',
+          'chunk': invalidVersionFrame,
+        });
 
-      final ReceiverErrorEvent errorEvent =
-          await emittedFuture as ReceiverErrorEvent;
-      expect(errorEvent.code, 'invalid_ble_frame');
-      expect(client.disconnected, isFalse);
-    });
+        final ReceiverErrorEvent errorEvent =
+            await emittedFuture as ReceiverErrorEvent;
+        expect(errorEvent.code, 'invalid_ble_frame');
+        expect(client.disconnected, isFalse);
+      },
+    );
   });
 }

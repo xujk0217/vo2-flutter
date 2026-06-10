@@ -56,9 +56,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
     setState(() {
       _profiles = profiles;
-      _selectedProfileId = profiles.any(
-        (UserProfile profile) => profile.id == selectedProfileId,
-      )
+      _selectedProfileId =
+          profiles.any((UserProfile profile) => profile.id == selectedProfileId)
           ? selectedProfileId
           : profiles.isNotEmpty
           ? profiles.first.id
@@ -206,25 +205,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                     const SizedBox(height: 14),
                   ],
-                  if (_showAddForm) _AddProfileCard(
-                    formKey: _formKey,
-                    displayNameController: _displayNameController,
-                    heightController: _heightController,
-                    weightController: _weightController,
-                    ageController: _ageController,
-                    vo2MaxController: _vo2MaxController,
-                    sex: _sex,
-                    isSaving: _isSaving,
-                    onSexChanged: (UserSex sex) {
-                      setState(() {
-                        _sex = sex;
-                      });
-                    },
-                    onSavePressed: _saveNewProfile,
-                    requiredTextValidator: _requiredText,
-                    numberValidator: _numberInRange,
-                    optionalVo2MaxValidator: _optionalVo2Max,
-                  ),
+                  if (_showAddForm)
+                    _AddProfileCard(
+                      formKey: _formKey,
+                      displayNameController: _displayNameController,
+                      heightController: _heightController,
+                      weightController: _weightController,
+                      ageController: _ageController,
+                      vo2MaxController: _vo2MaxController,
+                      sex: _sex,
+                      isSaving: _isSaving,
+                      onSexChanged: (UserSex sex) {
+                        setState(() {
+                          _sex = sex;
+                        });
+                      },
+                      onSavePressed: _saveNewProfile,
+                      requiredTextValidator: _requiredText,
+                      numberValidator: _numberInRange,
+                      optionalVo2MaxValidator: _optionalVo2Max,
+                    ),
                 ],
               ),
       ),
@@ -262,17 +262,22 @@ class _ProfileSelectionCard extends StatelessWidget {
           const SizedBox(height: 12),
           ...profiles.map((UserProfile profile) {
             final bool selected = profile.id == selectedProfileId;
-            return ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                selected
-                    ? Icons.radio_button_checked_rounded
-                    : Icons.radio_button_unchecked_rounded,
-                color: selected ? Theme.of(context).colorScheme.primary : null,
+            return Material(
+              color: Colors.transparent,
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  selected
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                ),
+                title: Text(profile.displayName),
+                subtitle: Text(profile.summary),
+                onTap: () => onProfileSelected(profile.id),
               ),
-              title: Text(profile.displayName),
-              subtitle: Text(profile.summary),
-              onTap: () => onProfileSelected(profile.id),
             );
           }),
           const SizedBox(height: 10),
@@ -355,7 +360,9 @@ class _AddProfileCard extends StatelessWidget {
             const SizedBox(height: 12),
             TextFormField(
               controller: heightController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(
                 labelText: '身高 (cm)',
                 border: OutlineInputBorder(),
@@ -365,7 +372,9 @@ class _AddProfileCard extends StatelessWidget {
             const SizedBox(height: 12),
             TextFormField(
               controller: weightController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(
                 labelText: '體重 (kg)',
                 border: OutlineInputBorder(),

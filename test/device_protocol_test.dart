@@ -137,6 +137,33 @@ void main() {
       expect(data.getFloat32(8, Endian.little), closeTo(0.5, 0.0001));
       expect(data.getFloat32(48, Endian.little), closeTo(20.5, 0.0001));
       expect(String.fromCharCodes(payload.sublist(84)), 'squat');
+
+      final DeviceSensorPayload decoded = DeviceSensorPayload.decode(payload);
+      expect(decoded.hostTimestampUs, 123456789);
+      expect(decoded.ppgChannels.first, closeTo(0.5, 0.0001));
+      expect(decoded.imuChannels.first, closeTo(20.5, 0.0001));
+      expect(String.fromCharCodes(decoded.actionType), 'squat');
+    });
+
+    test('decodes classifier_result payload', () {
+      final Uint8List payload = Uint8List(14);
+      ByteData.sublistView(payload)
+        ..setUint64(0, 123456, Endian.little)
+        ..setUint8(8, 1)
+        ..setUint8(9, 1)
+        ..setUint16(10, 12, Endian.little)
+        ..setUint16(12, 3, Endian.little);
+
+      final ClassifierResultPayload decoded = ClassifierResultPayload.decode(
+        payload,
+      );
+
+      expect(decoded.hostTsMs, 123456);
+      expect(decoded.isFitness, isTrue);
+      expect(decoded.movementId, 1);
+      expect(decoded.movementLabel, 'db_biceps_curl');
+      expect(decoded.reps, 12);
+      expect(decoded.sets, 3);
     });
 
     test('encodes fitness command payload command values', () {
@@ -203,12 +230,42 @@ void main() {
       expect(decoded.status, 0);
     });
 
+    test('decodes debug_quality payload with exact 31-byte layout', () {
+      final DebugQualityPayload decoded = DebugQualityPayload.decode(
+        _debugQualityPayload(artinisScorePresent: true),
+      );
+
+      expect(decoded.sampleCount, 512);
+      expect(decoded.qualityFlags, 0x01020304);
+      expect(decoded.ppgMin, closeTo(10.5, 0.001));
+      expect(decoded.ppgMax, closeTo(90.25, 0.001));
+      expect(decoded.ppgRange, closeTo(79.75, 0.001));
+      expect(decoded.nirsAvailable, isTrue);
+      expect(decoded.sampleRateEstimateHz, closeTo(25.5, 0.001));
+      expect(decoded.ppgPairQualityMask, 0x0F);
+      expect(decoded.ppgPairFlatlineMask, 0x03);
+      expect(decoded.ppgPairAutocorrSimilarMask, 0x05);
+      expect(decoded.artinisScorePresent, isTrue);
+      expect(decoded.artinisScore, closeTo(87.75, 0.001));
+      expect(
+        DebugQualityPayload.decode(
+          _debugQualityPayload(artinisScorePresent: false),
+        ).artinisScore,
+        isNull,
+      );
+      expect(
+        () => DebugQualityPayload.decode(Uint8List(30)),
+        throwsFormatException,
+      );
+    });
+
     test('decodes health and error payloads', () {
       final HealthResponsePayload health = HealthResponsePayload.decode(<int>[
-        0x03,
+        0x07,
       ]);
       expect(health.vo2Running, isTrue);
       expect(health.sensorRunning, isTrue);
+      expect(health.classifierRunning, isTrue);
 
       final Uint8List errorPayload = Uint8List.fromList(<int>[
         0x08,
@@ -330,6 +387,28 @@ void main() {
           result.typedPayload as HealthResponsePayload;
       expect(health.vo2Running, isTrue);
       expect(health.sensorRunning, isFalse);
+    });
+
+    test('parses valid debug_quality JSON', () {
+      final DeviceProtocolJsonResult? result =
+          DeviceProtocolJsonParser.tryParse(
+            _jsonFrame(
+              DeviceMessageType.debugQuality,
+              _debugQualityPayload(artinisScorePresent: true),
+              seq: 5,
+            ),
+          );
+
+      expect(result, isNotNull);
+      expect(result!.messageType, DeviceMessageType.debugQuality);
+      expect(result.seq, 5);
+      expect(result.typedPayload, isA<DebugQualityPayload>());
+
+      final DebugQualityPayload quality =
+          result.typedPayload as DebugQualityPayload;
+      expect(quality.sampleCount, 512);
+      expect(quality.qualityFlags, 0x01020304);
+      expect(quality.artinisScore, closeTo(87.75, 0.001));
     });
 
     test('parses valid error JSON', () {
@@ -537,6 +616,7 @@ void main() {
         DeviceMessageType.appStatus: Uint8List(8),
         DeviceMessageType.workoutSummary: Uint8List(76),
         DeviceMessageType.recommendationInput: Uint8List(12),
+        DeviceMessageType.debugQuality: Uint8List(30),
         DeviceMessageType.rpe: Uint8List(8),
       };
 
@@ -618,4 +698,22 @@ String _jsonFrame(int messageType, List<int> payload, {int seq = 0}) {
     'seq': seq,
     'payloadBase64': base64Encode(payload),
   });
+}
+
+Uint8List _debugQualityPayload({required bool artinisScorePresent}) {
+  final Uint8List payload = Uint8List(31);
+  ByteData.sublistView(payload)
+    ..setUint16(0, 512, Endian.little)
+    ..setUint32(2, 0x01020304, Endian.little)
+    ..setFloat32(6, 10.5, Endian.little)
+    ..setFloat32(10, 90.25, Endian.little)
+    ..setFloat32(14, 79.75, Endian.little)
+    ..setUint8(18, 1)
+    ..setFloat32(19, 25.5, Endian.little)
+    ..setUint8(23, 0x0F)
+    ..setUint8(24, 0x03)
+    ..setUint8(25, 0x05)
+    ..setUint8(26, artinisScorePresent ? 1 : 0)
+    ..setFloat32(27, 87.75, Endian.little);
+  return payload;
 }

@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:vo2_flutter/receiver/ble_receiver_transport.dart';
 import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
 import 'package:vo2_flutter/receiver/receiver_transport.dart';
+import 'package:vo2_flutter/receiver/receiver_transport_factory.dart';
 import 'package:vo2_flutter/screens/calibration_screen.dart';
 import 'package:vo2_flutter/user_profile.dart';
 import 'package:vo2_flutter/widgets/connection_card.dart';
@@ -31,10 +31,10 @@ class ConnectionScreen extends StatefulWidget {
     UserProfile profile = UserProfile.defaults,
     TransportKindChanged? onTransportKindChanged,
   }) : _connectionController = connectionController,
-        _transportKind = transportKind,
-        _protocolSession = protocolSession,
-        _profile = profile,
-        _onTransportKindChanged = onTransportKindChanged;
+       _transportKind = transportKind,
+       _protocolSession = protocolSession,
+       _profile = profile,
+       _onTransportKindChanged = onTransportKindChanged;
 
   static const String routeName = '/connection';
 
@@ -56,6 +56,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   bool _isSwitchingTransport = false;
   bool _showAdvancedTransport = false;
   bool _hasAutoNavigatedToCalibration = false;
+  Timer? _scanTimer;
+  DateTime? _lastAutoScanAt;
 
   @override
   void initState() {
@@ -64,7 +66,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     _connectionController =
         widget._connectionController ??
         ReceiverConnectionController(
-          transport: BleReceiverTransport(),
+          transport: createReceiverTransport(ReceiverTransportKind.ble),
         );
     _connectionController.addListener(_handleConnectionChanged);
     _protocolSession = widget._protocolSession;
@@ -72,6 +74,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     _protocolSession?.addListener(_handleProtocolChanged);
     _transportKind = widget._transportKind;
     unawaited(_connectionController.bootstrap());
+    _startContinuousScan();
   }
 
   @override
@@ -95,6 +98,34 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       _protocolSession?.updateProfile(widget._profile);
     }
     _transportKind = widget._transportKind;
+    _startContinuousScan();
+  }
+
+  void _startContinuousScan() {
+    _scanTimer ??= Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted ||
+          _connectionController.isConnected ||
+          _connectionController.isConnecting) {
+        return;
+      }
+      if (!_connectionController.permissionsGranted ||
+          !_connectionController.bluetoothEnabled) {
+        unawaited(_connectionController.bootstrap());
+        return;
+      }
+      final DateTime now = DateTime.now();
+      final Duration interval = _connectionController.devices.isEmpty
+          ? const Duration(seconds: 3)
+          : const Duration(seconds: 15);
+      final DateTime? lastScanAt = _lastAutoScanAt;
+      if (lastScanAt != null && now.difference(lastScanAt) < interval) {
+        return;
+      }
+      if (!_connectionController.isLoadingDevices) {
+        _lastAutoScanAt = now;
+        unawaited(_connectionController.refreshDevices());
+      }
+    });
   }
 
   void _handleConnectionChanged() {
@@ -109,11 +140,50 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       return;
     }
     _hasAutoNavigatedToCalibration = true;
-    await _protocolSession?.sendProfile(widget._profile);
+    final DeviceProtocolSession? protocolSession = _protocolSession;
+    if (protocolSession != null && protocolSession.latestProfileAck == null) {
+      await _waitForProfileAck(
+        protocolSession,
+        const Duration(milliseconds: 700),
+      );
+      if (protocolSession.latestProfileAck == null) {
+        await protocolSession.sendProfile(widget._profile);
+      }
+    }
     if (!mounted) {
       return;
     }
     Navigator.of(context).pushNamed(CalibrationScreen.routeName);
+  }
+
+  Future<void> _waitForProfileAck(
+    DeviceProtocolSession protocolSession,
+    Duration timeout,
+  ) async {
+    if (protocolSession.latestProfileAck != null) {
+      return;
+    }
+
+    final Completer<void> completer = Completer<void>();
+    Timer? timer;
+    late final VoidCallback listener;
+    listener = () {
+      if (protocolSession.latestProfileAck != null && !completer.isCompleted) {
+        completer.complete();
+      }
+    };
+    protocolSession.addListener(listener);
+    timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    });
+    try {
+      await completer.future;
+    } finally {
+      timer.cancel();
+      protocolSession.removeListener(listener);
+    }
   }
 
   void _handleProtocolChanged() {
@@ -144,7 +214,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
     final ReceiverConnectionController previousController =
         _connectionController;
-    final TransportSelectionResult selection = await onTransportKindChanged(kind);
+    final TransportSelectionResult selection = await onTransportKindChanged(
+      kind,
+    );
     final ReceiverConnectionController nextController =
         selection.connectionController;
     if (!mounted) return;
@@ -168,6 +240,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   @override
   void dispose() {
+    _scanTimer?.cancel();
     _connectionController.removeListener(_handleConnectionChanged);
     _protocolSession?.removeListener(_handleProtocolChanged);
     if (_ownsConnectionController) {
@@ -181,7 +254,10 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     if (health == null) return null;
     final String vo2 = health.vo2Running ? 'VO2 on' : 'VO2 off';
     final String sensor = health.sensorRunning ? 'Sensor on' : 'Sensor off';
-    return '$vo2 / $sensor';
+    final String classifier = health.classifierRunning
+        ? 'Classifier on'
+        : 'Classifier off';
+    return '$vo2 / $sensor / $classifier';
   }
 
   String? _appStatusLabel() {
@@ -213,7 +289,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              '預設使用 BLE 直接連接 bt_fucktrae_young，連線後會進入校正流程。',
+              '選擇你的手環，連線成功後會自動進入校正流程。',
               style: Theme.of(
                 context,
               ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF475569)),
@@ -225,7 +301,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               children: <Widget>[
                 Chip(
                   avatar: const Icon(Icons.sensors_rounded, size: 18),
-                  label: const Text('BLE protocol'),
+                  label: const Text('手環連線'),
                   backgroundColor: const Color(0xFFE0F2FE),
                   side: const BorderSide(color: Color(0xFFBAE6FD)),
                 ),
@@ -284,9 +360,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               isConnected: _connectionController.isConnected,
               onRequestPermissions: _connectionController.bootstrap,
               onRefreshDevices: _connectionController.refreshDevices,
-              onConnectPressed: _connectionController.toggleConnection,
-              onDeviceChanged: _connectionController.selectDevice,
-              showBleDiagnostics: showingBleDiagnostics,
+              onDevicePressed: _connectionController.connectToDevice,
+              showBleDiagnostics:
+                  _showAdvancedTransport && showingBleDiagnostics,
               lastTransportState: _connectionController.lastTransportState,
               lastErrorCode: _connectionController.lastErrorCode,
               lastProtocolMessageType: protocolSession?.lastProtocolMessageType,

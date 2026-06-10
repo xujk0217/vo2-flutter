@@ -98,6 +98,51 @@ Uint8List _rpeSamplePayload() {
   return payload;
 }
 
+Uint8List _sensorPayload() {
+  final Uint8List payload = Uint8List(84);
+  final ByteData data = ByteData.sublistView(payload);
+  data.setUint64(0, 123456, Endian.little);
+  int offset = 8;
+  for (int i = 0; i < 10; i += 1) {
+    data.setFloat32(offset, 1000 + i.toDouble(), Endian.little);
+    offset += 4;
+  }
+  for (int i = 0; i < 9; i += 1) {
+    data.setFloat32(offset, i / 10, Endian.little);
+    offset += 4;
+  }
+  return payload;
+}
+
+Uint8List _classifierResultPayload() {
+  final Uint8List payload = Uint8List(14);
+  ByteData.sublistView(payload)
+    ..setUint64(0, 654321, Endian.little)
+    ..setUint8(8, 1)
+    ..setUint8(9, 1)
+    ..setUint16(10, 12, Endian.little)
+    ..setUint16(12, 3, Endian.little);
+  return payload;
+}
+
+Uint8List _debugQualityPayload() {
+  final Uint8List payload = Uint8List(31);
+  ByteData.sublistView(payload)
+    ..setUint16(0, 512, Endian.little)
+    ..setUint32(2, 0x01020304, Endian.little)
+    ..setFloat32(6, 10.5, Endian.little)
+    ..setFloat32(10, 90.25, Endian.little)
+    ..setFloat32(14, 79.75, Endian.little)
+    ..setUint8(18, 1)
+    ..setFloat32(19, 25.5, Endian.little)
+    ..setUint8(23, 0x0F)
+    ..setUint8(24, 0x03)
+    ..setUint8(25, 0x05)
+    ..setUint8(26, 1)
+    ..setFloat32(27, 87.75, Endian.little);
+  return payload;
+}
+
 Uint8List _rpeAlertPayload(String message) {
   final List<int> messageBytes = utf8.encode(message);
   final Uint8List payload = Uint8List(16 + messageBytes.length);
@@ -122,8 +167,9 @@ void _assertFitnessCommandPayload(
   expect(frame.payload, hasLength(9));
   expect(frame.payload[0], command.value);
   expect(
-    ByteData.sublistView(Uint8List.fromList(frame.payload))
-        .getUint64(1, Endian.little),
+    ByteData.sublistView(
+      Uint8List.fromList(frame.payload),
+    ).getUint64(1, Endian.little),
     expectedHostTimestampMs,
   );
 }
@@ -274,57 +320,62 @@ void main() {
       },
     );
 
-    test('sendFitnessCommand helpers write command payloads in sequence', () async {
-      final writer = _FakeDeviceProtocolFrameWriter();
-      final DeviceProtocolSession session = DeviceProtocolSession(
-        writer: writer,
-        initialProfile: _defaultProfile,
-      );
+    test(
+      'sendFitnessCommand helpers write command payloads in sequence',
+      () async {
+        final writer = _FakeDeviceProtocolFrameWriter();
+        final DeviceProtocolSession session = DeviceProtocolSession(
+          writer: writer,
+          initialProfile: _defaultProfile,
+        );
 
-      expect(
-        await session.sendStartWorkout(hostTimestampMs: 0x0102030405060708),
-        isTrue,
-      );
-      expect(
-        await session.sendEndWorkout(hostTimestampMs: 0x1112131415161718),
-        isTrue,
-      );
-      expect(
-        await session.sendSkipCalibration(hostTimestampMs: 0x2122232425262728),
-        isTrue,
-      );
-      expect(
-        await session.sendStatusRequest(hostTimestampMs: 0x3132333435363738),
-        isTrue,
-      );
+        expect(
+          await session.sendStartWorkout(hostTimestampMs: 0x0102030405060708),
+          isTrue,
+        );
+        expect(
+          await session.sendEndWorkout(hostTimestampMs: 0x1112131415161718),
+          isTrue,
+        );
+        expect(
+          await session.sendSkipCalibration(
+            hostTimestampMs: 0x2122232425262728,
+          ),
+          isTrue,
+        );
+        expect(
+          await session.sendStatusRequest(hostTimestampMs: 0x3132333435363738),
+          isTrue,
+        );
 
-      expect(writer.writtenFrames, hasLength(4));
+        expect(writer.writtenFrames, hasLength(4));
 
-      _assertFitnessCommandPayload(
-        writer.writtenFrames[0],
-        FitnessCommand.startWorkout,
-        1,
-        0x0102030405060708,
-      );
-      _assertFitnessCommandPayload(
-        writer.writtenFrames[1],
-        FitnessCommand.endWorkout,
-        2,
-        0x1112131415161718,
-      );
-      _assertFitnessCommandPayload(
-        writer.writtenFrames[2],
-        FitnessCommand.skipCalibration,
-        3,
-        0x2122232425262728,
-      );
-      _assertFitnessCommandPayload(
-        writer.writtenFrames[3],
-        FitnessCommand.requestStatus,
-        4,
-        0x3132333435363738,
-      );
-    });
+        _assertFitnessCommandPayload(
+          writer.writtenFrames[0],
+          FitnessCommand.startWorkout,
+          1,
+          0x0102030405060708,
+        );
+        _assertFitnessCommandPayload(
+          writer.writtenFrames[1],
+          FitnessCommand.endWorkout,
+          2,
+          0x1112131415161718,
+        );
+        _assertFitnessCommandPayload(
+          writer.writtenFrames[2],
+          FitnessCommand.skipCalibration,
+          3,
+          0x2122232425262728,
+        );
+        _assertFitnessCommandPayload(
+          writer.writtenFrames[3],
+          FitnessCommand.requestStatus,
+          4,
+          0x3132333435363738,
+        );
+      },
+    );
 
     // ── profile request response ──────────────────────────────────────────
 
@@ -384,6 +435,7 @@ void main() {
         expect(session.latestHealthResponse, isA<HealthResponsePayload>());
         expect(session.latestHealthResponse!.vo2Running, isTrue);
         expect(session.latestHealthResponse!.sensorRunning, isTrue);
+        expect(session.latestHealthResponse!.classifierRunning, isFalse);
         expect(
           session.lastProtocolMessageType,
           DeviceMessageType.healthResponse,
@@ -398,8 +450,26 @@ void main() {
 
         await session.handleDataEvent(
           _bleDataEvent(
-            DeviceMessageType.workoutSummary,
+            DeviceMessageType.debugQuality,
             4,
+            _debugQualityPayload(),
+          ),
+        );
+        expect(session.latestDebugQuality, isA<DebugQualityPayload>());
+        expect(session.latestDebugQuality!.sampleCount, 512);
+        expect(session.latestDebugQuality!.qualityFlags, 0x01020304);
+        expect(
+          session.latestDebugQuality!.sampleRateEstimateHz,
+          closeTo(25.5, 0.001),
+        );
+        expect(session.latestDebugQuality!.artinisScore, closeTo(87.75, 0.001));
+        expect(session.lastProtocolMessageType, DeviceMessageType.debugQuality);
+        expect(session.lastUnsupportedMessageType, isNull);
+
+        await session.handleDataEvent(
+          _bleDataEvent(
+            DeviceMessageType.workoutSummary,
+            5,
             _workoutSummaryPayload(),
           ),
         );
@@ -414,7 +484,7 @@ void main() {
         await session.handleDataEvent(
           _bleDataEvent(
             DeviceMessageType.recommendationInput,
-            5,
+            6,
             _recommendationInputPayload(),
           ),
         );
@@ -431,7 +501,7 @@ void main() {
         await session.handleDataEvent(
           _bleDataEvent(
             DeviceMessageType.rpe,
-            6,
+            7,
             _rpeAlertPayload('slow down'),
           ),
         );
@@ -611,7 +681,7 @@ void main() {
     // ── non-calibration events are ignored/passive ────────────────────────
 
     test(
-      'sensor_ppg_imu during running calibration does not change state or writes',
+      'sensor_ppg_imu during running calibration updates latest sample only',
       () async {
         final writer = _FakeDeviceProtocolFrameWriter();
         final DeviceProtocolSession session = DeviceProtocolSession(
@@ -644,11 +714,7 @@ void main() {
         writer.writtenFrames.clear();
 
         await session.handleDataEvent(
-          _bleDataEvent(
-            DeviceMessageType.sensorPpgImu,
-            0,
-            List<int>.generate(93, (int i) => i),
-          ),
+          _bleDataEvent(DeviceMessageType.sensorPpgImu, 0, _sensorPayload()),
         );
         expect(
           session.calibrationState,
@@ -658,10 +724,14 @@ void main() {
         expect(session.calibrationHrEstimate, 78);
         expect(session.calibrationProgress, closeTo(0.5, 0.001));
         expect(session.latestVo2Prediction!.vo2MlKgMin, closeTo(42.5, 0.001));
+        expect(session.latestSensorSample, isA<DeviceSensorPayload>());
+        expect(session.latestSensorSample!.hostTimestampUs, 123456);
         expect(
-          session.lastProtocolMessageType,
-          DeviceMessageType.vo2Prediction,
+          session.latestSensorSample!.ppgChannels.first,
+          closeTo(1000, 0.001),
         );
+        expect(session.latestSensorSample!.imuChannels[1], closeTo(0.1, 0.001));
+        expect(session.lastProtocolMessageType, DeviceMessageType.sensorPpgImu);
         expect(writer.writtenFrames, isEmpty);
       },
     );
@@ -691,7 +761,11 @@ void main() {
         expect(writer.writtenFrames, isEmpty);
 
         await session.handleDataEvent(
-          _bleDataEvent(DeviceMessageType.classifierResult, 0, <int>[]),
+          _bleDataEvent(
+            DeviceMessageType.classifierResult,
+            0,
+            _classifierResultPayload(),
+          ),
         );
         expect(
           session.calibrationState,
@@ -701,10 +775,11 @@ void main() {
           session.lastProtocolMessageType,
           DeviceMessageType.classifierResult,
         );
-        expect(
-          session.lastUnsupportedMessageType,
-          DeviceMessageType.classifierResult,
-        );
+        expect(session.latestClassifierResult, isA<ClassifierResultPayload>());
+        expect(session.latestClassifierResult!.movementLabel, 'db_biceps_curl');
+        expect(session.latestClassifierResult!.reps, 12);
+        expect(session.latestClassifierResult!.sets, 3);
+        expect(session.lastUnsupportedMessageType, isNull);
         expect(writer.writtenFrames, isEmpty);
 
         await session.handleDataEvent(
@@ -718,7 +793,7 @@ void main() {
           session.lastProtocolMessageType,
           DeviceMessageType.fitnessCommand,
         );
-        expect(session.lastUnsupportedMessageType, DeviceMessageType.classifierResult);
+        expect(session.lastUnsupportedMessageType, isNull);
         expect(session.calibrationProgress, isNull);
         expect(session.latestVo2Prediction, isNull);
         expect(writer.writtenFrames, isEmpty);

@@ -1,10 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:vo2_flutter/receiver/ble_receiver_transport.dart';
 import 'package:vo2_flutter/receiver/device_protocol.dart';
 import 'package:vo2_flutter/receiver/device_protocol_session.dart';
 import 'package:vo2_flutter/receiver/receiver_connection_controller.dart';
+import 'package:vo2_flutter/receiver/receiver_transport.dart';
+import 'package:vo2_flutter/receiver/receiver_transport_factory.dart';
 import 'package:vo2_flutter/user_profile.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -39,7 +40,9 @@ class _DashboardPageState extends State<DashboardPage> {
     _ownsConnectionController = widget._connectionController == null;
     _connectionController =
         widget._connectionController ??
-        ReceiverConnectionController(transport: BleReceiverTransport());
+        ReceiverConnectionController(
+          transport: createReceiverTransport(ReceiverTransportKind.ble),
+        );
     _connectionController.addListener(_handleConnectionChanged);
     _protocolSession = widget._protocolSession;
     _protocolSession?.updateProfile(widget._profile);
@@ -115,6 +118,9 @@ class _DashboardPageState extends State<DashboardPage> {
       return false;
     }
     return session.latestVo2Prediction != null ||
+        session.latestSensorSample != null ||
+        session.latestDebugQuality != null ||
+        session.latestClassifierResult != null ||
         session.latestAppStatus != null ||
         session.latestHealthResponse != null ||
         session.latestRpeAlert != null ||
@@ -126,6 +132,14 @@ class _DashboardPageState extends State<DashboardPage> {
 
   static String _hexMessageType(int value) {
     return '0x${value.toRadixString(16).padLeft(4, '0')}';
+  }
+
+  static String _hexByte(int value) {
+    return '0x${value.toRadixString(16).padLeft(2, '0')}';
+  }
+
+  static String _hexUint32(int value) {
+    return '0x${value.toRadixString(16).padLeft(8, '0')}';
   }
 
   String _protocolSummary() {
@@ -164,18 +178,14 @@ class _DashboardPageState extends State<DashboardPage> {
                 if (session == null) {
                   return;
                 }
-                unawaited(
-                  _sendCommand('已送出狀態請求', session.sendStatusRequest),
-                );
+                unawaited(_sendCommand('已送出狀態請求', session.sendStatusRequest));
               },
               onStartWorkout: () {
                 final DeviceProtocolSession? session = _protocolSession;
                 if (session == null) {
                   return;
                 }
-                unawaited(
-                  _sendCommand('已送出開始訓練', session.sendStartWorkout),
-                );
+                unawaited(_sendCommand('已送出開始訓練', session.sendStartWorkout));
               },
               onEndWorkout: () {
                 final DeviceProtocolSession? session = _protocolSession;
@@ -193,6 +203,9 @@ class _DashboardPageState extends State<DashboardPage> {
               runSpacing: 12,
               children: <Widget>[
                 _Vo2Card(prediction: session?.latestVo2Prediction),
+                _SensorCard(sample: session?.latestSensorSample),
+                _DebugQualityCard(quality: session?.latestDebugQuality),
+                _ClassifierCard(result: session?.latestClassifierResult),
                 _AppStatusCard(status: session?.latestAppStatus),
                 _HealthCard(health: session?.latestHealthResponse),
                 _ProtocolDiagnosticsCard(session: session),
@@ -232,23 +245,23 @@ class _DashboardHeader extends StatelessWidget {
         children: <Widget>[
           Text(
             'BLE protocol monitoring',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w900,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 8),
           Text(
             '使用者：${profile.displayName}',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 4),
           Text(
             profile.summary,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFF64748B),
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
           ),
           const SizedBox(height: 14),
           Wrap(
@@ -308,7 +321,9 @@ class _CommandCard extends StatelessWidget {
               FilledButton.icon(
                 onPressed: canStartWorkout ? onStartWorkout : null,
                 icon: const Icon(Icons.play_arrow_rounded),
-                label: Text(canStartWorkout ? 'Start workout' : 'Start unavailable'),
+                label: Text(
+                  canStartWorkout ? 'Start workout' : 'Start unavailable',
+                ),
               ),
               FilledButton.tonalIcon(
                 onPressed: canWriteProtocol ? onEndWorkout : null,
@@ -321,9 +336,9 @@ class _CommandCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               commandStatus!,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: const Color(0xFF475569),
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF475569)),
             ),
           ],
         ],
@@ -345,9 +360,9 @@ class _WaitingCard extends StatelessWidget {
           Expanded(
             child: Text(
               '等待 BLE protocol data；尚未收到裝置回報前不顯示 0、隨機或 demo 生理指標。',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: const Color(0xFF475569),
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF475569)),
             ),
           ),
         ],
@@ -407,8 +422,75 @@ class _HealthCard extends StatelessWidget {
       value: value == null ? '等待資料' : 'VO2 ${value.vo2Running ? 'on' : 'off'}',
       detail: value == null
           ? '等待 BLE protocol data'
-          : 'sensor ${value.sensorRunning ? 'running' : 'stopped'}',
+          : 'sensor ${value.sensorRunning ? 'running' : 'stopped'} / classifier ${value.classifierRunning ? 'running' : 'stopped'}',
       accentColor: const Color(0xFF16A34A),
+    );
+  }
+}
+
+class _SensorCard extends StatelessWidget {
+  const _SensorCard({required this.sample});
+
+  final DeviceSensorPayload? sample;
+
+  @override
+  Widget build(BuildContext context) {
+    final DeviceSensorPayload? value = sample;
+    final double? ppg0 = value?.ppgChannels.firstOrNull;
+    final double? ax = value?.imuChannels.firstOrNull;
+    return _MetricTile(
+      title: 'sensor_ppg_imu',
+      value: value == null ? '等待資料' : 'PPG ${ppg0?.toStringAsFixed(0) ?? '-'}',
+      detail: value == null
+          ? '等待 BLE protocol data'
+          : 'tsUs ${value.hostTimestampUs}\nPPG channels ${value.ppgChannels.length} / IMU channels ${value.imuChannels.length}\nax ${ax?.toStringAsFixed(3) ?? '-'}',
+      accentColor: const Color(0xFF7C3AED),
+    );
+  }
+}
+
+class _DebugQualityCard extends StatelessWidget {
+  const _DebugQualityCard({required this.quality});
+
+  final DebugQualityPayload? quality;
+
+  @override
+  Widget build(BuildContext context) {
+    final DebugQualityPayload? value = quality;
+    final double? artinisScore = value?.artinisScore;
+    final String detail = value == null
+        ? '等待 BLE protocol data'
+        : <String>[
+            'flags ${_DashboardPageState._hexUint32(value.qualityFlags)}',
+            'PPG range ${value.ppgRange.toStringAsFixed(1)} / min ${value.ppgMin.toStringAsFixed(1)} / max ${value.ppgMax.toStringAsFixed(1)}',
+            'NIRS ${value.nirsAvailable ? 'yes' : 'no'} / sample ${value.sampleRateEstimateHz.toStringAsFixed(1)} Hz',
+            'masks q ${_DashboardPageState._hexByte(value.ppgPairQualityMask)} / flat ${_DashboardPageState._hexByte(value.ppgPairFlatlineMask)} / autocorr ${_DashboardPageState._hexByte(value.ppgPairAutocorrSimilarMask)}',
+            'Artinis ${artinisScore == null ? 'absent' : 'present ${artinisScore.toStringAsFixed(2)}'}',
+          ].join('\n');
+    return _MetricTile(
+      title: 'debug_quality',
+      value: value == null ? '等待資料' : 'count ${value.sampleCount}',
+      detail: detail,
+      accentColor: const Color(0xFF0284C7),
+    );
+  }
+}
+
+class _ClassifierCard extends StatelessWidget {
+  const _ClassifierCard({required this.result});
+
+  final ClassifierResultPayload? result;
+
+  @override
+  Widget build(BuildContext context) {
+    final ClassifierResultPayload? value = result;
+    return _MetricTile(
+      title: 'classifier_result',
+      value: value == null ? '等待資料' : value.movementLabel,
+      detail: value == null
+          ? '等待 BLE protocol data'
+          : 'mode ${value.isFitness ? 'fitness' : 'other'} / reps ${value.reps} / sets ${value.sets}\nmovement ${value.movementId} / tsMs ${value.hostTsMs}',
+      accentColor: const Color(0xFFDB2777),
     );
   }
 }
@@ -460,16 +542,16 @@ class _RpeAlertCard extends StatelessWidget {
           else ...<Widget>[
             Text(
               value.message,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
               'type ${value.alertType} / RPE ${value.rpe} / duration ${value.durationMs} ms / ts ${value.hostTsMs}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: const Color(0xFF64748B),
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
             ),
           ],
         ],
@@ -501,9 +583,15 @@ class _WorkoutSummaryCard extends StatelessWidget {
               children: <Widget>[
                 _StatusChip(label: 'duration ${value.durationMs} ms'),
                 _StatusChip(label: 'movements ${value.totalMovementCount}'),
-                _StatusChip(label: 'VO2 avg ${value.vo2Avg.toStringAsFixed(1)}'),
-                _StatusChip(label: 'VO2 min ${value.vo2Min.toStringAsFixed(1)}'),
-                _StatusChip(label: 'VO2 max ${value.vo2Max.toStringAsFixed(1)}'),
+                _StatusChip(
+                  label: 'VO2 avg ${value.vo2Avg.toStringAsFixed(1)}',
+                ),
+                _StatusChip(
+                  label: 'VO2 min ${value.vo2Min.toStringAsFixed(1)}',
+                ),
+                _StatusChip(
+                  label: 'VO2 max ${value.vo2Max.toStringAsFixed(1)}',
+                ),
                 _StatusChip(label: 'VO2 samples ${value.vo2SampleCount}'),
                 _StatusChip(label: 'RPE avg ${value.rpeAvg}'),
                 _StatusChip(label: 'RPE samples ${value.rpeSampleCount}'),
@@ -597,23 +685,23 @@ class _MetricTile extends StatelessWidget {
           const SizedBox(height: 14),
           Text(
             title,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFF64748B),
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
           ),
           const SizedBox(height: 8),
           Text(
             value,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w900,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 6),
           Text(
             detail,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: const Color(0xFF64748B),
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
           ),
         ],
       ),

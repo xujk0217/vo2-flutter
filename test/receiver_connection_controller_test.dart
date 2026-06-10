@@ -156,10 +156,7 @@ void main() {
           ReceiverConnectionController(transport: transport);
 
       transport.eventController.add(
-        const ReceiverErrorEvent(
-          code: 'gatt_error',
-          message: 'GATT failed.',
-        ),
+        const ReceiverErrorEvent(code: 'gatt_error', message: 'GATT failed.'),
       );
       await pumpEventQueue();
 

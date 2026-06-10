@@ -5,8 +5,7 @@ import 'package:vo2_flutter/sensor_processing.dart';
 void main() {
   group('SensorSample.tryParse', () {
     test('parses a valid CSV sensor line', () {
-      const String line =
-          '1,2,3,4,100,200,300,400,500,0.1,0.2,0.3,1.1,1.2,1.3';
+      const String line = '1,2,3,4,100,200,300,400,500,0.1,0.2,0.3,1.1,1.2,1.3';
 
       final SensorSample? sample = SensorSample.tryParse(line);
 
@@ -45,8 +44,7 @@ void main() {
   group('CsvSensorSampleParser', () {
     test('parses valid payload through parser seam', () {
       const CsvSensorSampleParser parser = CsvSensorSampleParser();
-      const String line =
-          '1,2,3,4,100,200,300,400,500,0.1,0.2,0.3,1.1,1.2,1.3';
+      const String line = '1,2,3,4,100,200,300,400,500,0.1,0.2,0.3,1.1,1.2,1.3';
 
       final SensorSample? sample = parser.tryParse(line);
 
