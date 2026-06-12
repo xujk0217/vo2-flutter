@@ -166,6 +166,26 @@ void main() {
       expect(decoded.sets, 3);
     });
 
+    test('decodes classifier_result other movement explicitly', () {
+      final Uint8List payload = Uint8List(14);
+      ByteData.sublistView(payload)
+        ..setUint64(0, 123456, Endian.little)
+        ..setUint8(8, 0)
+        ..setUint8(9, 255)
+        ..setUint16(10, 12, Endian.little)
+        ..setUint16(12, 3, Endian.little);
+
+      final ClassifierResultPayload decoded = ClassifierResultPayload.decode(
+        payload,
+      );
+
+      expect(decoded.isFitness, isFalse);
+      expect(decoded.movementId, 255);
+      expect(decoded.movementLabel, 'other');
+      expect(decoded.reps, 12);
+      expect(decoded.sets, 3);
+    });
+
     test('encodes fitness command payload command values', () {
       expect(FitnessCommand.startWorkout.value, 0);
       expect(FitnessCommand.endWorkout.value, 1);
@@ -518,6 +538,8 @@ void main() {
       expect(summary.workoutEndTsMs, 9000);
       expect(summary.durationMs, 8000);
       expect(summary.totalMovementCount, 8);
+      expect(summary.repsByMovement, hasLength(8));
+      expect(summary.setsByMovement, hasLength(8));
       expect(summary.repsByMovement, <int>[10, 11, 12, 13, 14, 15, 16, 17]);
       expect(summary.setsByMovement, <int>[20, 21, 22, 23, 24, 25, 26, 27]);
       expect(summary.vo2Min, closeTo(21.5, 0.001));
