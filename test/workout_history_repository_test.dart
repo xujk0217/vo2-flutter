@@ -54,11 +54,11 @@ void main() {
   });
 
   test('explicit protocol movement mapping does not follow catalog order', () {
-    expect(exerciseForProtocolMovement(1).label, '啞鈴二頭彎舉');
+    expect(exerciseForProtocolMovement(1)!.label, '啞鈴二頭彎舉');
     expect(
-      exerciseForProtocolMovement(1).label,
+      exerciseForProtocolMovement(1)!.label,
       isNot(exerciseCatalog[1].label),
     );
-    expect(exerciseForProtocolMovement(7).label, '單手啞鈴划船');
+    expect(exerciseForProtocolMovement(7)!.label, '單手啞鈴划船');
   });
 }

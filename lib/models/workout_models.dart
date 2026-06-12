@@ -44,8 +44,27 @@ final Map<int, ExerciseType> protocolMovementExercises = <int, ExerciseType>{
   7: exerciseCatalog[1],
 };
 
-ExerciseType exerciseForProtocolMovement(int movementId) {
-  return protocolMovementExercises[movementId] ?? exerciseCatalog.first;
+const int protocolOtherMovementId = 255;
+const String protocolOtherMovementLabel = 'other';
+const String protocolUnknownMovementLabel = 'unknown';
+
+bool isProtocolFitnessMovement(int movementId) {
+  return protocolMovementExercises.containsKey(movementId);
+}
+
+ExerciseType? exerciseForProtocolMovement(int movementId) {
+  return protocolMovementExercises[movementId];
+}
+
+String movementLabelForProtocolMovement(int movementId) {
+  final ExerciseType? exercise = exerciseForProtocolMovement(movementId);
+  if (exercise != null) {
+    return exercise.label;
+  }
+  if (movementId == protocolOtherMovementId) {
+    return protocolOtherMovementLabel;
+  }
+  return protocolUnknownMovementLabel;
 }
 
 class MovementSummary {
@@ -68,23 +87,26 @@ class MovementSummary {
     required int reps,
     required int sets,
   }) {
+    final bool hasFitnessMovement = isProtocolFitnessMovement(movementId);
     return MovementSummary(
       movementId: movementId,
-      exerciseLabel: exerciseForProtocolMovement(movementId).label,
-      reps: reps,
-      sets: sets,
+      exerciseLabel: movementLabelForProtocolMovement(movementId),
+      reps: hasFitnessMovement ? reps : 0,
+      sets: hasFitnessMovement ? sets : 0,
     );
   }
 
   factory MovementSummary.fromJson(Map<String, dynamic> json) {
     final int movementId = _asInt(json['movementId'], 0);
+    final Object? storedLabel = json['exerciseLabel'];
+    final bool hasFitnessMovement = isProtocolFitnessMovement(movementId);
     return MovementSummary(
       movementId: movementId,
-      exerciseLabel: json['exerciseLabel'] is String
-          ? json['exerciseLabel'] as String
-          : exerciseForProtocolMovement(movementId).label,
-      reps: _asInt(json['reps'], 0),
-      sets: _asInt(json['sets'], 0),
+      exerciseLabel: storedLabel is String && hasFitnessMovement
+          ? storedLabel
+          : movementLabelForProtocolMovement(movementId),
+      reps: hasFitnessMovement ? _asInt(json['reps'], 0) : 0,
+      sets: hasFitnessMovement ? _asInt(json['sets'], 0) : 0,
     );
   }
 
@@ -215,12 +237,13 @@ class WorkoutHistoryEntry {
     required RpeAlertPayload? rpeAlert,
     RecommendationInputPayload? recommendationInput,
   }) {
+    final bool hasFitnessMovement = isProtocolFitnessMovement(movementId);
     final List<MovementSummary> movements = List<MovementSummary>.generate(
       8,
       (int index) => MovementSummary.fromProtocol(
         movementId: index,
-        reps: index == movementId ? reps : 0,
-        sets: index == movementId ? sets : 0,
+        reps: hasFitnessMovement && index == movementId ? reps : 0,
+        sets: hasFitnessMovement && index == movementId ? sets : 0,
       ),
     );
     final int rpe = rpeAlert?.rpe ?? 0;
@@ -232,7 +255,7 @@ class WorkoutHistoryEntry {
       startedAt: startedAt,
       endedAt: endedAt,
       duration: endedAt.difference(startedAt),
-      totalMovementCount: reps > 0 ? 1 : 0,
+      totalMovementCount: hasFitnessMovement && reps > 0 ? 1 : 0,
       movements: movements,
       vo2Min: vo2Value,
       vo2Max: vo2Value,
