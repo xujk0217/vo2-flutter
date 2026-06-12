@@ -355,7 +355,9 @@ private final class MacBleBridge: NSObject, FlutterStreamHandler, CBCentralManag
     let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
     let serviceUuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
     let serviceMatches = serviceUuids.contains(targetServiceUuid)
-    let displayName = advertisedName ?? peripheral.name ?? (serviceMatches ? "btfy" : "BLE device")
+    let displayName = advertisedName?.isEmpty == false
+      ? advertisedName!
+      : (peripheral.name?.isEmpty == false ? peripheral.name! : "")
     let nameMatches = acceptedNames.contains(displayName)
     guard includeUnmatched || serviceMatches || nameMatches else {
       return

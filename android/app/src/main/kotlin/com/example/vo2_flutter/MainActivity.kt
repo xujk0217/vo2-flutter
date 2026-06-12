@@ -714,7 +714,7 @@ class MainActivity : FlutterActivity() {
         val deviceName = device.name
         val displayName = scanRecordName?.takeIf { it.isNotBlank() }
             ?: deviceName?.takeIf { it.isNotBlank() }
-            ?: device.address
+            ?: ""
         val serviceMatches = scanRecord?.serviceUuids?.any { parcelUuid ->
             parcelUuid.uuid == serviceUuid
         } == true
