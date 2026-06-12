@@ -36,6 +36,7 @@ ReceiverDataEvent _bleDataEvent(int messageType, int seq, List<int> payload) {
 }
 
 Uint8List _classifierPayload({
+  int mode = 1,
   int movementId = 1,
   int reps = 12,
   int sets = 3,
@@ -43,7 +44,7 @@ Uint8List _classifierPayload({
   final Uint8List payload = Uint8List(14);
   ByteData.sublistView(payload)
     ..setUint64(0, 123456, Endian.little)
-    ..setUint8(8, 1)
+    ..setUint8(8, mode)
     ..setUint8(9, movementId)
     ..setUint16(10, reps, Endian.little)
     ..setUint16(12, sets, Endian.little);
@@ -229,6 +230,42 @@ void main() {
     final List<WorkoutHistoryEntry> entries = await repository.load();
     expect(entries, hasLength(1));
     expect(entries.single.vo2Avg, closeTo(38, 0.001));
+  });
+
+  testWidgets('live page renders other as non-fitness state', (
+    WidgetTester tester,
+  ) async {
+    final DeviceProtocolSession session = DeviceProtocolSession();
+    const UserProfile profile = UserProfile(
+      id: 'kai',
+      displayName: 'Kai',
+      heightCm: 180,
+      weightKg: 75,
+      age: 35,
+      sex: UserSex.male,
+    );
+    addTearDown(session.dispose);
+
+    await session.handleDataEvent(
+      _bleDataEvent(
+        DeviceMessageType.classifierResult,
+        1,
+        _classifierPayload(mode: 0, movementId: 255, reps: 12, sets: 3),
+      ),
+    );
+
+    await _pumpTall(
+      tester,
+      _wrap(LiveFitnessPage(protocolSession: session, profile: profile)),
+    );
+
+    expect(find.text('其他'), findsWidgets);
+    expect(find.text('啞鈴臥推'), findsNothing);
+    expect(find.text('非 8 種訓練動作，不計入組數'), findsOneWidget);
+    expect(
+      find.text('這個狀態會保留即時 VO2 與 RPE，但不會把次數或組數歸到任何一個健身動作。'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('live page saves fallback only after summary timeout', (

@@ -324,7 +324,9 @@ void main() {
       expect(find.byType(ConnectionScreen), findsOneWidget);
       expect(find.text('裝置連線'), findsWidgets);
       expect(find.text(_kaiProfile.displayName), findsOneWidget);
-      _expectSemanticTap(tester, '重新整理', enabled: true);
+      expect(find.text('重新整理'), findsNothing);
+      expect(find.text(transport.deviceName), findsOneWidget);
+      _expectSemanticTap(tester, RegExp(transport.deviceName), enabled: true);
 
       final UserProfile selected = await UserProfile.loadSelectedProfile();
       expect(selected.displayName, _kaiProfile.displayName);

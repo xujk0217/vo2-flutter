@@ -172,15 +172,11 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
     }
     final ClassifierResultPayload? classifier =
         widget.protocolSession.latestClassifierResult;
-    final int movementId =
-        protocolMovementExercises.containsKey(classifier?.movementId)
-        ? classifier!.movementId
-        : 0;
     return WorkoutHistoryEntry.fallbackFromLive(
       profile: widget.profile,
       startedAt: _startedAt ?? DateTime.now(),
       endedAt: DateTime.now(),
-      movementId: movementId,
+      movementId: classifier?.movementId ?? protocolOtherMovementId,
       reps: classifier?.reps ?? 0,
       sets: classifier?.sets ?? 0,
       vo2: widget.protocolSession.latestVo2Prediction?.vo2MlKgMin,
@@ -193,14 +189,19 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
   Widget build(BuildContext context) {
     final DeviceProtocolSession session = widget.protocolSession;
     final ClassifierResultPayload? classifier = session.latestClassifierResult;
-    final int movementId =
-        protocolMovementExercises.containsKey(classifier?.movementId)
-        ? classifier!.movementId
-        : 0;
-    final ExerciseType exercise = exerciseForProtocolMovement(movementId);
+    final bool hasFitnessMovement =
+        classifier != null &&
+        classifier.isFitness &&
+        isProtocolFitnessMovement(classifier.movementId);
+    final ExerciseType? exercise = hasFitnessMovement
+        ? exerciseForProtocolMovement(classifier.movementId)
+        : null;
     final double? vo2 = session.latestVo2Prediction?.vo2MlKgMin;
-    final int reps = classifier?.reps ?? 0;
-    final int sets = classifier?.sets ?? 0;
+    final int reps = hasFitnessMovement ? classifier.reps : 0;
+    final int sets = hasFitnessMovement ? classifier.sets : 0;
+    final String movementLabel = classifier == null
+        ? '等待資料'
+        : _liveMovementLabelForProtocolMovement(classifier.movementId);
     final RpeAlertPayload? rpeAlert = session.latestRpeAlert;
     final ErrorPayload? error = session.protocolError;
 
@@ -223,6 +224,8 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
             final Widget primary = _primaryColumn(
               context,
               exercise,
+              movementLabel,
+              hasFitnessMovement,
               vo2,
               reps,
               sets,
@@ -230,7 +233,12 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
               error,
               _isEndingWorkout,
             );
-            final Widget secondary = _secondaryColumn(context, exercise);
+            final Widget secondary = _secondaryColumn(
+              context,
+              exercise,
+              movementLabel,
+              hasFitnessMovement,
+            );
             return ListView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
               children: <Widget>[
@@ -266,7 +274,9 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
 
   Widget _primaryColumn(
     BuildContext context,
-    ExerciseType exercise,
+    ExerciseType? exercise,
+    String movementLabel,
+    bool hasFitnessMovement,
     double? vo2,
     int reps,
     int sets,
@@ -326,15 +336,20 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
         ],
         SizedBox(
           height: 420,
-          child: ExerciseIllustrationCard(
-            exercise: exercise,
-            isActive: _workoutStarted,
-            repetitions: reps,
-            statusText: _workoutStarted
-                ? '保持呼吸節奏，讓每一下完整可控。'
-                : '按下開始後，手環會同步追蹤動作與 VO2。',
-            onRepCompleted: () {},
-          ),
+          child: hasFitnessMovement && exercise != null
+              ? ExerciseIllustrationCard(
+                  exercise: exercise,
+                  isActive: _workoutStarted,
+                  repetitions: reps,
+                  statusText: _workoutStarted
+                      ? '保持呼吸節奏，讓每一下完整可控。'
+                      : '按下開始後，手環會同步追蹤動作與 VO2。',
+                  onRepCompleted: () {},
+                )
+              : _NonFitnessStateCard(
+                  movementLabel: movementLabel,
+                  isActive: _workoutStarted,
+                ),
         ),
         const SizedBox(height: 14),
         Wrap(
@@ -348,9 +363,11 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
               tone: const Color(0xFF0E7490),
             ),
             MetricCard(
-              title: '目前動作',
-              value: '$reps',
-              unit: '${exercise.label} · $sets 組',
+              title: hasFitnessMovement ? '目前動作' : '目前狀態',
+              value: hasFitnessMovement ? '$reps' : movementLabel,
+              unit: hasFitnessMovement
+                  ? '${exercise!.label} · $sets 組'
+                  : '非 8 種訓練動作，不計入組數',
               tone: const Color(0xFFF97316),
             ),
           ],
@@ -368,11 +385,18 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
     );
   }
 
-  Widget _secondaryColumn(BuildContext context, ExerciseType exercise) {
+  Widget _secondaryColumn(
+    BuildContext context,
+    ExerciseType? exercise,
+    String movementLabel,
+    bool hasFitnessMovement,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        MuscleMapCard(highlighted: exercise.muscleGroups.toSet()),
+        MuscleMapCard(
+          highlighted: exercise?.muscleGroups.toSet() ?? <MuscleGroup>{},
+        ),
         const SizedBox(height: 14),
         _ProductPanel(
           child: Column(
@@ -386,7 +410,9 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                '目前辨識為 ${exercise.label}。穩定速度比追求最快更重要，讓每次推、拉、蹲都回到完整起點。',
+                hasFitnessMovement && exercise != null
+                    ? '目前辨識為 ${exercise.label}。穩定速度比追求最快更重要，讓每次推、拉、蹲都回到完整起點。'
+                    : '目前辨識為 $movementLabel，暫不視為訓練動作。調整站姿或開始正式動作後，手環會再同步更新。',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: const Color(0xFF475569),
                 ),
@@ -429,6 +455,70 @@ class _LiveFitnessPageState extends State<LiveFitnessPage> {
       return '目前強度 ${alert.rpe}/10，若動作穩定，可以逐步提高節奏。';
     }
     return '目前強度 ${alert.rpe}/10，維持這個呼吸節奏。';
+  }
+
+  String _liveMovementLabelForProtocolMovement(int movementId) {
+    if (movementId == protocolOtherMovementId) {
+      return '其他';
+    }
+    return movementLabelForProtocolMovement(movementId);
+  }
+}
+
+class _NonFitnessStateCard extends StatelessWidget {
+  const _NonFitnessStateCard({
+    required this.movementLabel,
+    required this.isActive,
+  });
+
+  final String movementLabel;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ProductPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0E7490).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(14),
+              child: Icon(
+                Icons.self_improvement_rounded,
+                color: Color(0xFF0E7490),
+                size: 32,
+              ),
+            ),
+          ),
+          const Spacer(),
+          Text(
+            movementLabel,
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isActive ? '目前不是訓練動作' : '等待訓練動作',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: const Color(0xFF0F766E),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '這個狀態會保留即時 VO2 與 RPE，但不會把次數或組數歸到任何一個健身動作。',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
+          ),
+        ],
+      ),
+    );
   }
 }
 
