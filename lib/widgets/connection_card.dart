@@ -8,6 +8,8 @@ class ConnectionCard extends StatelessWidget {
     super.key,
     required this.devices,
     required this.selectedDeviceId,
+    required this.connectingDeviceId,
+    required this.connectedDeviceId,
     required this.permissionsGranted,
     required this.bluetoothEnabled,
     required this.statusMessage,
@@ -15,7 +17,6 @@ class ConnectionCard extends StatelessWidget {
     required this.isConnecting,
     required this.isConnected,
     required this.onRequestPermissions,
-    required this.onRefreshDevices,
     required this.onDevicePressed,
     this.showBleDiagnostics = false,
     this.lastTransportState,
@@ -28,6 +29,8 @@ class ConnectionCard extends StatelessWidget {
 
   final List<ReceiverDeviceInfo> devices;
   final String? selectedDeviceId;
+  final String? connectingDeviceId;
+  final String? connectedDeviceId;
   final bool permissionsGranted;
   final bool bluetoothEnabled;
   final String statusMessage;
@@ -35,7 +38,6 @@ class ConnectionCard extends StatelessWidget {
   final bool isConnecting;
   final bool isConnected;
   final Future<void> Function() onRequestPermissions;
-  final Future<void> Function() onRefreshDevices;
   final Future<void> Function(String deviceId) onDevicePressed;
   final bool showBleDiagnostics;
   final String? lastTransportState;
@@ -63,32 +65,11 @@ class ConnectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  '藍牙連線',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-                ),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: isLoadingDevices
-                    ? null
-                    : () {
-                        unawaited(onRefreshDevices());
-                      },
-                icon: isLoadingDevices
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh_rounded),
-                label: const Text('重新整理'),
-              ),
-            ],
+          Text(
+            '藍牙連線',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
           DecoratedBox(
@@ -173,23 +154,29 @@ class ConnectionCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                ...devices.map(
-                  (ReceiverDeviceInfo device) => Padding(
+                ...devices.map((ReceiverDeviceInfo device) {
+                  final bool deviceIsConnecting =
+                      isConnecting && device.id == connectingDeviceId;
+                  final bool deviceIsConnected =
+                      isConnected && device.id == connectedDeviceId;
+                  final bool canPress =
+                      !isConnecting && (!isConnected || deviceIsConnected);
+                  return Padding(
+                    key: ValueKey<String>(device.id),
                     padding: const EdgeInsets.only(bottom: 8),
                     child: _DeviceListTile(
                       device: device,
                       isSelected: device.id == selectedDeviceId,
-                      isConnecting:
-                          isConnecting && device.id == selectedDeviceId,
-                      isConnected: isConnected && device.id == selectedDeviceId,
-                      onPressed: isConnecting
-                          ? null
-                          : () {
+                      isConnecting: deviceIsConnecting,
+                      isConnected: deviceIsConnected,
+                      onPressed: canPress
+                          ? () {
                               unawaited(onDevicePressed(device.id));
-                            },
+                            }
+                          : null,
                     ),
-                  ),
-                ),
+                  );
+                }),
               ],
             ),
         ],
@@ -233,7 +220,7 @@ class _DeviceListTile extends StatelessWidget {
       onTap: onPressed,
       label:
           'BLE 裝置 ${device.name} ${device.id} ${isConnected
-              ? '已連線'
+              ? '已連線，取消連線'
               : isConnecting
               ? '連線中'
               : '連線'}',
@@ -303,12 +290,9 @@ class _DeviceListTile extends StatelessWidget {
                   const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      Icon(
-                        Icons.check_circle_rounded,
-                        color: Color(0xFF16A34A),
-                      ),
+                      Icon(Icons.link_off_rounded, color: Color(0xFF16A34A)),
                       SizedBox(width: 4),
-                      Text('已連線'),
+                      Text('取消連線'),
                     ],
                   )
                 else if (isConnecting)

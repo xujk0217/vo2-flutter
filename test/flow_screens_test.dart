@@ -15,6 +15,7 @@ import 'package:vo2_flutter/screens/connection_screen.dart';
 import 'package:vo2_flutter/screens/dashboard_page.dart';
 import 'package:vo2_flutter/screens/live_fitness_page.dart';
 import 'package:vo2_flutter/user_profile.dart';
+import 'package:vo2_flutter/widgets/connection_card.dart';
 
 class _FakeReceiverTransport implements ReceiverTransport {
   _FakeReceiverTransport({
@@ -248,6 +249,198 @@ void main() {
       DeviceMessageType.profile,
     );
     expect(transport.writtenFrames.first.payload.last, 44);
+  });
+
+  testWidgets('connection screen has no refresh button and scans when active', (
+    WidgetTester tester,
+  ) async {
+    final _FakeReceiverTransport transport = _FakeReceiverTransport();
+    final ReceiverConnectionController controller =
+        ReceiverConnectionController(transport: transport);
+    addTearDown(() async {
+      await controller.disposeAsync();
+      await transport.eventController.close();
+    });
+
+    await _pumpTall(
+      tester,
+      _wrap(
+        ConnectionScreen(
+          connectionController: controller,
+          transportKind: ReceiverTransportKind.ble,
+        ),
+      ),
+    );
+
+    expect(find.text('重新整理'), findsNothing);
+    expect(find.text(transport.deviceName), findsOneWidget);
+    expect(transport.getDevicesCalls, 1);
+
+    await tester.pump(const Duration(seconds: 3));
+    expect(transport.getDevicesCalls, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump(const Duration(seconds: 3));
+    expect(transport.getDevicesCalls, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    await tester.pump(const Duration(seconds: 3));
+    expect(transport.getDevicesCalls, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump(const Duration(seconds: 3));
+    expect(transport.getDevicesCalls, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.detached);
+    await tester.pump(const Duration(seconds: 3));
+    expect(transport.getDevicesCalls, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(transport.getDevicesCalls, 3);
+
+    await tester.pump(const Duration(seconds: 3));
+    expect(transport.getDevicesCalls, 4);
+  });
+
+  testWidgets('connection rows use active device id for state and action', (
+    WidgetTester tester,
+  ) async {
+    final List<String> pressedDeviceIds = <String>[];
+
+    await _pumpTall(
+      tester,
+      _wrap(
+        ConnectionCard(
+          devices: const <ReceiverDeviceInfo>[
+            ReceiverDeviceInfo(
+              name: 'Alpha',
+              id: 'AA:BB',
+              transportKind: ReceiverTransportKind.ble,
+            ),
+            ReceiverDeviceInfo(
+              name: 'Beta',
+              id: 'CC:DD',
+              transportKind: ReceiverTransportKind.ble,
+            ),
+          ],
+          selectedDeviceId: 'AA:BB',
+          connectingDeviceId: null,
+          connectedDeviceId: 'CC:DD',
+          permissionsGranted: true,
+          bluetoothEnabled: true,
+          statusMessage: 'Connected.',
+          isLoadingDevices: false,
+          isConnecting: false,
+          isConnected: true,
+          onRequestPermissions: () async {},
+          onDevicePressed: (String deviceId) async {
+            pressedDeviceIds.add(deviceId);
+          },
+        ),
+      ),
+    );
+
+    final Finder selectedRow = find.byKey(const ValueKey<String>('AA:BB'));
+    final Finder connectedRow = find.byKey(const ValueKey<String>('CC:DD'));
+    expect(selectedRow, findsOneWidget);
+    expect(connectedRow, findsOneWidget);
+    expect(
+      find.descendant(of: selectedRow, matching: find.text('取消連線')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: connectedRow, matching: find.text('取消連線')),
+      findsOneWidget,
+    );
+
+    await tester.tap(connectedRow);
+    await tester.pump();
+
+    expect(pressedDeviceIds, <String>['CC:DD']);
+  });
+
+  testWidgets('connection row list children are keyed by device id', (
+    WidgetTester tester,
+  ) async {
+    Widget card(List<ReceiverDeviceInfo> devices) {
+      return _wrap(
+        ConnectionCard(
+          devices: devices,
+          selectedDeviceId: 'AA:BB',
+          connectingDeviceId: null,
+          connectedDeviceId: 'CC:DD',
+          permissionsGranted: true,
+          bluetoothEnabled: true,
+          statusMessage: 'Connected.',
+          isLoadingDevices: false,
+          isConnecting: false,
+          isConnected: true,
+          onRequestPermissions: () async {},
+          onDevicePressed: (_) async {},
+        ),
+      );
+    }
+
+    await _pumpTall(
+      tester,
+      card(const <ReceiverDeviceInfo>[
+        ReceiverDeviceInfo(
+          name: 'Alpha',
+          id: 'AA:BB',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+        ReceiverDeviceInfo(
+          name: 'Beta',
+          id: 'CC:DD',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+      ]),
+    );
+
+    await tester.pumpWidget(
+      card(const <ReceiverDeviceInfo>[
+        ReceiverDeviceInfo(
+          name: 'Beta',
+          id: 'CC:DD',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+        ReceiverDeviceInfo(
+          name: 'Alpha',
+          id: 'AA:BB',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+      ]),
+    );
+    await tester.pump();
+
+    final Finder alphaRow = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is Padding && widget.key == const ValueKey<String>('AA:BB'),
+    );
+    final Finder betaRow = find.byWidgetPredicate(
+      (Widget widget) =>
+          widget is Padding && widget.key == const ValueKey<String>('CC:DD'),
+    );
+
+    expect(alphaRow, findsOneWidget);
+    expect(betaRow, findsOneWidget);
+    expect(
+      find.descendant(of: alphaRow, matching: find.text('Alpha')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: alphaRow, matching: find.text('Beta')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: betaRow, matching: find.text('Beta')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: betaRow, matching: find.text('Alpha')),
+      findsNothing,
+    );
   });
 
   testWidgets('advanced transport switch reboots with Classic transport', (

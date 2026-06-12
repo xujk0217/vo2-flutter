@@ -48,7 +48,8 @@ class ConnectionScreen extends StatefulWidget {
   State<ConnectionScreen> createState() => _ConnectionScreenState();
 }
 
-class _ConnectionScreenState extends State<ConnectionScreen> {
+class _ConnectionScreenState extends State<ConnectionScreen>
+    with WidgetsBindingObserver {
   late ReceiverConnectionController _connectionController;
   late final bool _ownsConnectionController;
   DeviceProtocolSession? _protocolSession;
@@ -56,12 +57,17 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   bool _isSwitchingTransport = false;
   bool _showAdvancedTransport = false;
   bool _hasAutoNavigatedToCalibration = false;
+  bool _isAppActive = true;
   Timer? _scanTimer;
-  DateTime? _lastAutoScanAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final AppLifecycleState? lifecycleState =
+        WidgetsBinding.instance.lifecycleState;
+    _isAppActive =
+        lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
     _ownsConnectionController = widget._connectionController == null;
     _connectionController =
         widget._connectionController ??
@@ -103,29 +109,34 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   void _startContinuousScan() {
     _scanTimer ??= Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!mounted ||
-          _connectionController.isConnected ||
-          _connectionController.isConnecting) {
-        return;
-      }
-      if (!_connectionController.permissionsGranted ||
-          !_connectionController.bluetoothEnabled) {
-        unawaited(_connectionController.bootstrap());
-        return;
-      }
-      final DateTime now = DateTime.now();
-      final Duration interval = _connectionController.devices.isEmpty
-          ? const Duration(seconds: 3)
-          : const Duration(seconds: 15);
-      final DateTime? lastScanAt = _lastAutoScanAt;
-      if (lastScanAt != null && now.difference(lastScanAt) < interval) {
-        return;
-      }
-      if (!_connectionController.isLoadingDevices) {
-        _lastAutoScanAt = now;
-        unawaited(_connectionController.refreshDevices());
-      }
+      _refreshIfActive();
     });
+  }
+
+  void _refreshIfActive() {
+    if (!mounted ||
+        !_isAppActive ||
+        _connectionController.isConnected ||
+        _connectionController.isConnecting) {
+      return;
+    }
+    if (!_connectionController.permissionsGranted ||
+        !_connectionController.bluetoothEnabled) {
+      unawaited(_connectionController.bootstrap());
+      return;
+    }
+    if (!_connectionController.isLoadingDevices) {
+      unawaited(_connectionController.refreshDevices());
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final bool wasAppActive = _isAppActive;
+    _isAppActive = state == AppLifecycleState.resumed;
+    if (_isAppActive && !wasAppActive) {
+      _refreshIfActive();
+    }
   }
 
   void _handleConnectionChanged() {
@@ -241,6 +252,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   @override
   void dispose() {
     _scanTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _connectionController.removeListener(_handleConnectionChanged);
     _protocolSession?.removeListener(_handleProtocolChanged);
     if (_ownsConnectionController) {
@@ -352,6 +364,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
             ConnectionCard(
               devices: _connectionController.devices,
               selectedDeviceId: _connectionController.selectedDeviceId,
+              connectingDeviceId: _connectionController.connectingDeviceId,
+              connectedDeviceId: _connectionController.connectedDeviceId,
               permissionsGranted: _connectionController.permissionsGranted,
               bluetoothEnabled: _connectionController.bluetoothEnabled,
               statusMessage: _connectionController.statusMessage,
@@ -359,7 +373,6 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               isConnecting: _connectionController.isConnecting,
               isConnected: _connectionController.isConnected,
               onRequestPermissions: _connectionController.bootstrap,
-              onRefreshDevices: _connectionController.refreshDevices,
               onDevicePressed: _connectionController.connectToDevice,
               showBleDiagnostics:
                   _showAdvancedTransport && showingBleDiagnostics,
