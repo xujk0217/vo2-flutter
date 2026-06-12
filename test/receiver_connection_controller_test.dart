@@ -83,6 +83,80 @@ void main() {
       },
     );
 
+    test('uses only named devices for selection, merge, and status', () async {
+      final _FakeReceiverTransport transport = _FakeReceiverTransport()
+        ..devices = const <ReceiverDeviceInfo>[
+          ReceiverDeviceInfo(
+            name: '',
+            id: 'hidden-1',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+          ReceiverDeviceInfo(
+            name: '   ',
+            id: 'hidden-2',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+          ReceiverDeviceInfo(
+            name: 'Alpha',
+            id: 'AA:BB',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+          ReceiverDeviceInfo(
+            name: 'Beta',
+            id: 'CC:DD',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+        ];
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(
+            transport: transport,
+            preferredDeviceId: 'hidden-1',
+          );
+
+      await controller.bootstrap();
+
+      expect(
+        controller.devices.map((ReceiverDeviceInfo device) => device.id),
+        <String>['AA:BB', 'CC:DD'],
+      );
+      expect(controller.selectedDeviceId, 'AA:BB');
+      expect(controller.statusMessage, '已找到 2 台 BLE 裝置。');
+
+      controller.selectDevice('hidden-1');
+      transport.devices = const <ReceiverDeviceInfo>[
+        ReceiverDeviceInfo(
+          name: 'Beta updated',
+          id: 'CC:DD',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+        ReceiverDeviceInfo(
+          name: 'Alpha updated',
+          id: 'AA:BB',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+        ReceiverDeviceInfo(
+          name: 'Gamma',
+          id: 'EE:FF',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+        ReceiverDeviceInfo(
+          name: ' ',
+          id: 'hidden-1',
+          transportKind: ReceiverTransportKind.ble,
+        ),
+      ];
+
+      await controller.refreshDevices();
+
+      expect(
+        controller.devices.map((ReceiverDeviceInfo device) => device.id),
+        <String>['AA:BB', 'CC:DD', 'EE:FF'],
+      );
+      expect(controller.selectedDeviceId, 'CC:DD');
+      expect(controller.statusMessage, '已找到 3 台 BLE 裝置。');
+      await controller.disposeAsync();
+    });
+
     test(
       'connects selected device and disconnects when already connected',
       () async {
@@ -112,6 +186,163 @@ void main() {
         await controller.disposeAsync();
       },
     );
+
+    test(
+      'connectToDevice targets tapped id and keeps active ids through refresh',
+      () async {
+        final _FakeReceiverTransport transport = _FakeReceiverTransport()
+          ..devices = const <ReceiverDeviceInfo>[
+            ReceiverDeviceInfo(
+              name: 'Alpha',
+              id: 'AA:BB',
+              transportKind: ReceiverTransportKind.ble,
+            ),
+            ReceiverDeviceInfo(
+              name: 'Beta',
+              id: 'CC:DD',
+              transportKind: ReceiverTransportKind.ble,
+            ),
+          ];
+        final ReceiverConnectionController controller =
+            ReceiverConnectionController(
+              transport: transport,
+              preferredDeviceId: 'AA:BB',
+            );
+        await controller.bootstrap();
+        expect(controller.selectedDeviceId, 'AA:BB');
+
+        await controller.connectToDevice('CC:DD');
+
+        expect(transport.connectedDeviceId, 'CC:DD');
+        expect(controller.connectingDeviceId, 'CC:DD');
+
+        transport.devices = const <ReceiverDeviceInfo>[
+          ReceiverDeviceInfo(
+            name: 'Alpha updated',
+            id: 'AA:BB',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+          ReceiverDeviceInfo(
+            name: 'Beta updated',
+            id: 'CC:DD',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+        ];
+        await controller.refreshDevices();
+
+        expect(controller.connectingDeviceId, 'CC:DD');
+        transport.eventController.add(
+          const ReceiverStatusEvent(state: 'connected', message: 'Connected.'),
+        );
+        await pumpEventQueue();
+
+        expect(controller.connectedDeviceId, 'CC:DD');
+        expect(controller.connectingDeviceId, isNull);
+
+        controller.selectDevice('AA:BB');
+        expect(controller.selectedDeviceId, 'AA:BB');
+        expect(controller.connectedDeviceId, 'CC:DD');
+        await controller.disposeAsync();
+      },
+    );
+
+    test(
+      'keeps visible device names attached to ids through connect refresh',
+      () async {
+        final _FakeReceiverTransport transport = _FakeReceiverTransport()
+          ..devices = const <ReceiverDeviceInfo>[
+            ReceiverDeviceInfo(
+              name: 'Alpha',
+              id: 'AA:BB',
+              transportKind: ReceiverTransportKind.ble,
+            ),
+            ReceiverDeviceInfo(
+              name: 'Beta',
+              id: 'CC:DD',
+              transportKind: ReceiverTransportKind.ble,
+            ),
+          ];
+        final ReceiverConnectionController controller =
+            ReceiverConnectionController(transport: transport);
+        await controller.bootstrap();
+
+        await controller.connectToDevice('CC:DD');
+        transport.eventController.add(
+          const ReceiverStatusEvent(state: 'connected', message: 'Connected.'),
+        );
+        await pumpEventQueue();
+        expect(controller.connectedDeviceId, 'CC:DD');
+
+        transport.devices = const <ReceiverDeviceInfo>[
+          ReceiverDeviceInfo(
+            name: 'Alpha',
+            id: 'CC:DD',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+          ReceiverDeviceInfo(
+            name: 'Beta',
+            id: 'AA:BB',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+        ];
+        await controller.refreshDevices();
+
+        expect(
+          controller.devices.map(
+            (ReceiverDeviceInfo device) => '${device.id} ${device.name}',
+          ),
+          <String>['AA:BB Alpha', 'CC:DD Beta'],
+        );
+        expect(controller.connectedDeviceId, 'CC:DD');
+        await controller.disposeAsync();
+      },
+    );
+
+    test('connectToDevice disconnects the connected tapped device', () async {
+      final _FakeReceiverTransport transport = _FakeReceiverTransport()
+        ..devices = const <ReceiverDeviceInfo>[
+          ReceiverDeviceInfo(
+            name: 'Alpha',
+            id: 'AA:BB',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+          ReceiverDeviceInfo(
+            name: 'Beta',
+            id: 'CC:DD',
+            transportKind: ReceiverTransportKind.ble,
+          ),
+        ];
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+      await controller.bootstrap();
+
+      await controller.connectToDevice('CC:DD');
+      transport.eventController.add(
+        const ReceiverStatusEvent(state: 'connected', message: 'Connected.'),
+      );
+      await pumpEventQueue();
+
+      expect(controller.connectedDeviceId, 'CC:DD');
+      await controller.connectToDevice('CC:DD');
+
+      expect(transport.disconnected, isTrue);
+      expect(controller.isConnecting, isFalse);
+      expect(controller.isConnected, isFalse);
+      expect(controller.connectingDeviceId, isNull);
+      expect(controller.connectedDeviceId, isNull);
+
+      transport.eventController.add(
+        const ReceiverStatusEvent(
+          state: 'disconnected',
+          message: 'Disconnected.',
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.isConnected, isFalse);
+      expect(controller.connectedDeviceId, isNull);
+      await controller.disposeAsync();
+    });
 
     test('forwards data events to listener', () async {
       final _FakeReceiverTransport transport = _FakeReceiverTransport();
@@ -147,6 +378,31 @@ void main() {
       expect(controller.lastTransportState, 'write_started');
       expect(controller.lastErrorCode, isNull);
       expect(controller.statusMessage, 'BLE write started.');
+      await controller.disposeAsync();
+    });
+
+    test('keeps connected state across transient BLE write statuses', () async {
+      final _FakeReceiverTransport transport = _FakeReceiverTransport();
+      final ReceiverConnectionController controller =
+          ReceiverConnectionController(transport: transport);
+
+      transport.eventController.add(
+        const ReceiverStatusEvent(state: 'connected', message: 'Connected.'),
+      );
+      await pumpEventQueue();
+      expect(controller.isConnected, isTrue);
+
+      transport.eventController.add(
+        const ReceiverStatusEvent(
+          state: 'write_complete',
+          message: 'BLE write complete.',
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.lastTransportState, 'write_complete');
+      expect(controller.isConnected, isTrue);
+      expect(controller.statusMessage, 'BLE write complete.');
       await controller.disposeAsync();
     });
 

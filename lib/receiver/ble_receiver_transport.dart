@@ -12,7 +12,7 @@ class BleDeviceInfo {
 
   factory BleDeviceInfo.fromMap(Map<String, dynamic> map) {
     return BleDeviceInfo(
-      name: map['name'] as String? ?? DeviceBleUuids.advertisedName,
+      name: map['name'] as String? ?? '',
       id: map['id'] as String? ?? '',
     );
   }

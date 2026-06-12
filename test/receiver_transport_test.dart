@@ -174,6 +174,30 @@ void main() {
   });
 
   group('BleReceiverTransport', () {
+    test('maps missing BLE scan name to empty string', () {
+      final BleDeviceInfo device = BleDeviceInfo.fromMap(<String, dynamic>{
+        'id': 'ble-1',
+      });
+
+      expect(device.name, isEmpty);
+      expect(device.id, 'ble-1');
+    });
+
+    test('preserves empty BLE scan names from the bridge client', () async {
+      final _FakeBleBridgeClient client = _FakeBleBridgeClient()
+        ..devices = const <BleDeviceInfo>[BleDeviceInfo(name: '', id: 'ble-1')];
+      final BleReceiverTransport transport = BleReceiverTransport(
+        bridgeClient: client,
+      );
+
+      final List<ReceiverDeviceInfo> devices = await transport.getDevices();
+
+      expect(devices, hasLength(1));
+      expect(devices.single.name, isEmpty);
+      expect(devices.single.id, 'ble-1');
+      expect(devices.single.transportKind, ReceiverTransportKind.ble);
+    });
+
     test(
       'delegates permissions, adapter state, and scan results to BLE client',
       () async {
